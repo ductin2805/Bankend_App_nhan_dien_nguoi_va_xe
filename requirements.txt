@@ -1,0 +1,12 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+numpy==1.26.4
+opencv-python==4.10.0.84
+opencv-contrib-python==4.10.0.84
+ultralytics==8.1.0
+easyocr==1.7.1
+torch==2.2.1
+torchvision==0.17.1
+pillow==10.2.0
+pycrc==0.11.0
+scikit-image==0.23.2
