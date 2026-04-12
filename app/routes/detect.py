@@ -1,5 +1,9 @@
 """API routes cho detection endpoint."""
 
+import os
+import time
+import base64
+import uuid
 from fastapi import APIRouter, UploadFile, Query
 from app.services.detection_service import DetectionService
 from app.utils.image_utils import load_image_from_bytes
@@ -53,6 +57,38 @@ async def detect(file: UploadFile, recognize_plates: bool = Query(False)):
         
         # Perform detection
         result = detection_service.detect_objects(img, recognize_plates=recognize_plates)
+
+        # Log summary cho lịch sử với ảnh đại diện
+        from app.services.history_service import history_service
+        representative_image_path = ""
+        history_result = {
+            "detections": result.get("detections", []),
+            "plates": result.get("plates", [])
+        }
+
+        image_b64 = result.get("image", "")
+        if image_b64:
+            history_results_dir = os.path.join("runs", "history_frames")
+            os.makedirs(history_results_dir, exist_ok=True)
+            file_name = f"{int(time.time() * 1000)}_{uuid.uuid4().hex}.jpg"
+            file_path = os.path.join(history_results_dir, file_name)
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(base64.b64decode(image_b64))
+                representative_image_path = file_path.replace("\\", "/")
+                history_result["image_path"] = representative_image_path
+            except Exception:
+                history_result["image_path"] = ""
+
+        history_service.add_entry({
+            "type": "object_detection",
+            "summary": {
+                "detections": len(result.get("detections", [])),
+                "plates_detected": len(result.get("plates", [])),
+                "recognize_plates": recognize_plates
+            },
+            "representative_image_path": representative_image_path
+        }, full_result=history_result)
         
         print("RESULT:", result.get("detections"))
         

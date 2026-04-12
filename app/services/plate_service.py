@@ -238,10 +238,12 @@ class PlateRecognitionService:
                     final_text = re.sub(r'[^A-Z0-9\-]', '', combined_text)
 
             avg_confidence = sum(all_confidences) / len(all_confidences)
+            is_valid = bool(final_text and VietnamPlateFormatter.validate_format(final_text))
             
             return {
                 "text": final_text,
                 "confidence": round(avg_confidence, 4),
+                "is_valid": is_valid,
                 "details": [{"text": txt.upper(), "conf": round(conf, 4)} 
                            for txt, conf in zip(all_texts, all_confidences)]
             }
@@ -349,6 +351,9 @@ class PlateRecognitionService:
             bottom = min(image.shape[0], bottom)
             
             plate_roi = image[top:bottom, left:right]
+            
+            if plate_roi.size == 0:
+                plate_roi = image[y1:y2, x1:x2]
             
             if plate_roi.size == 0:
                 plate_roi = image[y1:y2, x1:x2]

@@ -49,6 +49,17 @@ async def recognize_plate(file: UploadFile):
         
         print("PLATE RESULT:", result)
         
+        # Log summary cho lịch sử
+        from app.services.history_service import history_service
+        history_service.add_entry({
+            "type": "plate_recognition",
+            "summary": {
+                "plate_text": result.get("text", ""),
+                "confidence": result.get("confidence", 0.0),
+                "is_valid": result.get("is_valid", False)
+            }
+        }, full_result=result)
+        
         return result
         
     except Exception as e:

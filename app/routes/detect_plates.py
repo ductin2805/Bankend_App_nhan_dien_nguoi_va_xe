@@ -1,5 +1,9 @@
 """API routes cho plate detection & recognition endpoint."""
 
+import os
+import time
+import base64
+import uuid
 from fastapi import APIRouter, UploadFile
 from app.services.detection_service import DetectionService
 from app.utils.image_utils import load_image_from_bytes
@@ -127,11 +131,46 @@ async def detect_plates(file: UploadFile):
         from app.utils.image_utils import encode_image_to_base64
         img_base64 = encode_image_to_base64(annotated)
         
-        return {
+        result = {
             "image": img_base64,
             "total_vehicles": len(vehicles),
             "vehicles": vehicles
         }
+        
+        # Log summary cho lịch sử
+        from app.services.history_service import history_service
+        plates_found = [v["plate"]["text"] for v in vehicles if v["plate"]["detected"]]
+
+        representative_image_path = ""
+        history_result = {
+            "total_vehicles": len(vehicles),
+            "vehicles": vehicles
+        }
+
+        if img_base64:
+            history_results_dir = os.path.join("runs", "history_frames")
+            os.makedirs(history_results_dir, exist_ok=True)
+            file_name = f"{int(time.time() * 1000)}_{uuid.uuid4().hex}.jpg"
+            file_path = os.path.join(history_results_dir, file_name)
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(base64.b64decode(img_base64))
+                representative_image_path = file_path.replace("\\", "/")
+                history_result["image_path"] = representative_image_path
+            except Exception:
+                history_result["image_path"] = ""
+
+        history_service.add_entry({
+            "type": "image_detection",
+            "summary": {
+                "total_vehicles": len(vehicles),
+                "plates_detected": len(plates_found),
+                "plates_found": plates_found
+            },
+            "representative_image_path": representative_image_path
+        }, full_result=history_result)
+        
+        return result
         
     except Exception as e:
         print(f"🔥 ERROR trong /detect-plates: {e}")

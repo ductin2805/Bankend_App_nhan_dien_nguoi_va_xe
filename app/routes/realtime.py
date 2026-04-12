@@ -8,8 +8,8 @@ video_service = VideoProcessingService()
 @router.post("/recognize-video")
 async def recognize_video(
     file: UploadFile,
-    frame_skip: int = Query(10, ge=1, description="Số frame bỏ qua giữa mỗi lần xử lý"),
-    max_frames: int = Query(20, ge=1, description="Số frame tối đa sẽ xử lý")
+    frame_skip: int = Query(30, ge=1, description="Số frame bỏ qua giữa mỗi lần xử lý"),
+    max_frames: int = Query(50, ge=1, description="Số frame tối đa sẽ xử lý")
 ):
     """Nhận diện xe và biển số từ video upload."""
     contents = await file.read()

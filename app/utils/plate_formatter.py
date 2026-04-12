@@ -16,6 +16,7 @@ class VietnamPlateFormatter:
     PATTERNS = [
         (r"^(\d{2})([A-Z])(\d{4})$", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(3)}"),
         (r"^(\d{2})([A-Z])(\d{5})$", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(3)}"),
+        (r"^(\d{2})([A-Z])(\d)(\d{5})$", lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}-{m.group(4)}"),
         (r"^(\d{2})([A-Z]{2})(\d{4})$", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(3)}"),
         (r"^(\d{3})([A-Z])(\d{4})$", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(3)}"),
         (r"^(\d{2})([A-Z])(\d{1,3})$", lambda m: f"{m.group(1)}-{m.group(2)}{m.group(3)}"),
@@ -66,13 +67,8 @@ class VietnamPlateFormatter:
         
         # Các pattern để tìm kiếm
         search_patterns = [
-            r"\d{2}[A-Z]\d{4}",
-            r"\d{2}[A-Z]\d{5}",
-            r"\d{2}[A-Z]{2}\d{4}",
-            r"\d{3}[A-Z]\d{4}",
-            r"\d{2}[A-Z]\d{1,3}",
-            r"\d{1,3}[A-Z]{1,2}\d{1,3}",
-            r"\d{2}[A-Z]\d{5,6}",  # Format mới: 61A99166
+            r"\d{2}[A-Z]\d{6}",   # Moto: 67B284061 -> 67B2-84061
+            r"\d{2}[A-Z]\d{5}",   # Car: 67B84061 -> 67B-84061
         ]
         
         for pattern in search_patterns:
@@ -169,36 +165,18 @@ class VietnamPlateFormatter:
     
     @staticmethod
     def _apply_format(candidate: str) -> str:
-        if re.fullmatch(r"^(\d{2})([A-Z])(\d{4})$", candidate):
-            return f"{candidate[:3]}-{candidate[3:]}"
-        elif re.fullmatch(r"^(\d{2})([A-Z])(\d{5})$", candidate):
+        if re.fullmatch(r"^(\d{2})([A-Z])(\d{5})$", candidate):
             return f"{candidate[:3]}-{candidate[3:]}"
         elif re.fullmatch(r"^(\d{2})([A-Z])(\d{6})$", candidate):
-            return f"{candidate[:3]}-{candidate[3:]}"
-        elif re.fullmatch(r"^(\d{2})([A-Z]{2})(\d{4})$", candidate):
             return f"{candidate[:4]}-{candidate[4:]}"
-        elif re.fullmatch(r"^(\d{3})([A-Z])(\d{4})$", candidate):
-            return f"{candidate[:4]}-{candidate[4:]}"
-        elif re.fullmatch(r"^(\d{2})([A-Z])(\d{1,3})$", candidate):
-            return f"{candidate[:2]}-{candidate[2:]}"
         return ""
 
     @staticmethod
     def _plate_score(formatted: str) -> int:
-        if re.fullmatch(r"^\d{2}[A-Z]-\d{6}$", formatted):
-            return 110
+        if re.fullmatch(r"^\d{2}[A-Z]\d-\d{5}$", formatted):
+            return 120
         if re.fullmatch(r"^\d{2}[A-Z]-\d{5}$", formatted):
-            return 100
-        if re.fullmatch(r"^\d{2}[A-Z]-\d{4}$", formatted):
-            return 90
-        if re.fullmatch(r"^\d{2}[A-Z]{2}-\d{4}$", formatted):
-            return 95
-        if re.fullmatch(r"^\d{3}[A-Z]-\d{4}$", formatted):
-            return 90
-        if re.fullmatch(r"^\d{2}-[A-Z]\d{1,3}$", formatted):
-            return 80
-        if re.fullmatch(r"^\d{1,3}-[A-Z]{1,2}\d{1,3}$", formatted):
-            return 70
+            return 110
         return 0
 
     @staticmethod
@@ -255,14 +233,8 @@ class VietnamPlateFormatter:
             return False
         
         valid_patterns = [
-            r"^\d{2}[A-Z]-\d{4}$",      # 61A-1234
-            r"^\d{2}[A-Z]-\d{6}$",      # 61A-123456
-            r"^\d{2}[A-Z]-\d{5}$",      # 61A-12345
-            r"^\d{2}[A-Z]-\d{4}$",      # 61A-1234
-            r"^\d{2}[A-Z]{2}-\d{4}$",   # 29AB-1234
-            r"^\d{3}[A-Z]-\d{4}$",      # 123B-4567
-            r"^\d{2}-[A-Z]\d{1,3}$",    # 90-B2
-            r"^\d{1,3}-[A-Z]{1,2}\d{1,3}$",  # Linh hoạt
+            r"^\d{2}[A-Z]\d-\d{5}$",    # Moto: 67B2-84061
+            r"^\d{2}[A-Z]-\d{5}$",      # Car: 67B-84061
         ]
         
         for pattern in valid_patterns:
