@@ -128,3 +128,25 @@ docker run -d \
 	-v $(pwd)/runs:/app/runs \
 	ainhandien-api
 ```
+
+## Tự động deploy từ GitHub lên Azure VM
+
+Bạn có thể dùng workflow GitHub Actions ở `.github/workflows/deploy-azure.yml` để mỗi lần push lên `main` thì Azure VM tự pull code và restart container.
+
+### Cần tạo GitHub Secrets
+- `AZURE_HOST`: public IP hoặc domain của VM.
+- `AZURE_USER`: user SSH, ví dụ `azureuser`.
+- `AZURE_SSH_KEY`: private key SSH dùng để đăng nhập VM.
+- `AZURE_APP_DIR`: đường dẫn code trên VM, ví dụ `/home/azureuser/ainhandien`.
+- `AZURE_REPO_URL`: URL repo GitHub, ví dụ `https://github.com/<user>/<repo>.git`.
+- `AZURE_MACHINE_ACCESS_KEYS`: JSON mapping nếu bạn bật auth theo máy.
+
+### Cách dùng
+1. Đảm bảo VM đã cài Docker và đã mở port `80`.
+2. Add các secrets ở GitHub repo: `Settings -> Secrets and variables -> Actions`.
+3. Push code lên `main`.
+4. Workflow sẽ SSH vào VM, `git reset --hard`, build image và chạy lại container.
+
+### Lưu ý
+- Nếu repo private, nên set `AZURE_REPO_URL` bằng URL có quyền truy cập phù hợp hoặc dùng repo public.
+- File `runs/` vẫn nên là volume để ảnh history không mất sau khi deploy.

@@ -1,0 +1,54 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.AZURE_HOST }}
+          username: ${{ secrets.AZURE_USER }}
+          key: ${{ secrets.AZURE_SSH_KEY }}
+          script: |
+            set -e
+
+            APP_DIR="${{ secrets.AZURE_APP_DIR }}"
+            REPO_URL="${{ secrets.AZURE_REPO_URL }}"
+            BRANCH="main"
+
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="$HOME/ainhandien"
+            fi
+
+            if [ -z "$REPO_URL" ]; then
+              REPO_URL="https://github.com/${{ github.repository }}.git"
+            fi
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              rm -rf "$APP_DIR"
+              git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+
+            docker build -t ainhandien-api .
+            docker stop ainhandien-api || true
+            docker rm ainhandien-api || true
+
+            docker run -d \
+              --name ainhandien-api \
+              --restart unless-stopped \
+              -p 80:8000 \
+              -v "$APP_DIR/runs:/app/runs" \
+              -e MACHINE_ACCESS_KEYS='${{ secrets.AZURE_MACHINE_ACCESS_KEYS }}' \
+              ainhandien-api
