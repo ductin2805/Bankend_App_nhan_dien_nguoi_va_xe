@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - fallback when Pillow is unavailable
     ImageFont = None
 
 from app.utils.image_utils import encode_image_to_base64
+from app.services.machine_context import get_current_machine_id
 
 
 class FaceRecognitionService:
@@ -228,7 +229,7 @@ class FaceRecognitionService:
         updated = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
         image[:, :] = updated
 
-    def register_person(self, image: np.ndarray, name: str, person_code: str = "", info: dict[str, Any] | None = None) -> dict:
+    def register_person(self, image: np.ndarray, name: str, person_code: str = "", info: dict[str, Any] | None = None, machine_id: str | None = None) -> dict:
         candidates = self._extract_face_candidates(image)
         if not candidates:
             return {"error": "Không phát hiện khuôn mặt."}
@@ -246,8 +247,10 @@ class FaceRecognitionService:
             descriptors = [self._face_descriptor(sample) for sample in samples]
 
         person_id = str(uuid.uuid4())
+        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         person = {
             "person_id": person_id,
+            "machine_id": machine_scope,
             "name": name,
             "person_code": person_code,
             "info": info or {},
@@ -273,12 +276,13 @@ class FaceRecognitionService:
             "annotated_image": encode_image_to_base64(annotated),
         }
 
-    def recognize(self, image: np.ndarray, threshold: float = 0.55) -> dict:
+    def recognize(self, image: np.ndarray, threshold: float = 0.55, machine_id: str | None = None) -> dict:
         face_candidates = self._extract_face_candidates(image)
         annotated = image.copy()
         candidate_results = []
 
-        persons = self.data.get("persons", [])
+        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
+        persons = [person for person in self.data.get("persons", []) if (person.get("machine_id") or "default") == machine_scope]
 
         for candidate in face_candidates:
             x1, y1, x2, y2 = candidate["bbox"]
@@ -349,23 +353,76 @@ class FaceRecognitionService:
             "embedding_backend": self.embedding_backend,
         }
 
-    def list_persons(self) -> list[dict]:
+    def list_persons(self, machine_id: str | None = None) -> list[dict]:
+        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         persons = []
         for person in self.data.get("persons", []):
+            if (person.get("machine_id") or "default") != machine_scope:
+                continue
             persons.append(
                 {
                     "person_id": person.get("person_id"),
                     "name": person.get("name"),
                     "person_code": person.get("person_code"),
                     "info": person.get("info", {}),
+                    "registration_image_path": person.get("registration_image_path", ""),
                     "created_at": person.get("created_at"),
                 }
             )
         return persons
 
-    def delete_person(self, person_id: str) -> bool:
+    def set_registration_image_path(self, person_id: str, image_path: str, machine_id: str | None = None) -> bool:
+        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         persons = self.data.get("persons", [])
-        new_persons = [p for p in persons if p.get("person_id") != person_id]
+        for person in persons:
+            if person.get("person_id") == person_id and (person.get("machine_id") or "default") == machine_scope:
+                person["registration_image_path"] = image_path or ""
+                self._save_db()
+                return True
+        return False
+
+    def update_person(
+        self,
+        person_id: str,
+        name: str | None = None,
+        person_code: str | None = None,
+        info: dict[str, Any] | None = None,
+        registration_image_path: str | None = None,
+        machine_id: str | None = None,
+    ) -> dict:
+        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
+        persons = self.data.get("persons", [])
+        for person in persons:
+            if person.get("person_id") != person_id or (person.get("machine_id") or "default") != machine_scope:
+                continue
+
+            if name is not None:
+                person["name"] = name
+            if person_code is not None:
+                person["person_code"] = person_code
+            if info is not None:
+                current_info = person.get("info", {})
+                current_info.update(info)
+                person["info"] = current_info
+            if registration_image_path is not None:
+                person["registration_image_path"] = registration_image_path
+
+            self._save_db()
+            return {
+                "person_id": person.get("person_id"),
+                "name": person.get("name"),
+                "person_code": person.get("person_code"),
+                "info": person.get("info", {}),
+                "registration_image_path": person.get("registration_image_path", ""),
+                "created_at": person.get("created_at"),
+            }
+
+        return {"error": "Person not found"}
+
+    def delete_person(self, person_id: str, machine_id: str | None = None) -> bool:
+        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
+        persons = self.data.get("persons", [])
+        new_persons = [p for p in persons if p.get("person_id") != person_id or (p.get("machine_id") or "default") != machine_scope]
         if len(new_persons) == len(persons):
             return False
         self.data["persons"] = new_persons

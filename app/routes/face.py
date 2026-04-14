@@ -4,8 +4,10 @@ import base64
 import os
 import time
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, UploadFile, Form, Query
+from pydantic import BaseModel, Field
 
 from app.services.face_service import FaceRecognitionService
 from app.services.history_service import history_service
@@ -13,6 +15,19 @@ from app.utils.image_utils import load_image_from_bytes
 
 router = APIRouter(tags=["face"])
 face_service = FaceRecognitionService()
+
+
+class UpdateFacePersonRequest(BaseModel):
+    name: Optional[str] = Field(default=None, description="Tên người")
+    person_code: Optional[str] = Field(default=None, description="Mã nhân sự")
+    department: Optional[str] = Field(default=None, description="Phòng ban")
+    role: Optional[str] = Field(default=None, description="Chức vụ")
+    phone: Optional[str] = Field(default=None, description="Số điện thoại")
+    address: Optional[str] = Field(default=None, description="Địa chỉ")
+    age: Optional[str] = Field(default=None, description="Tuổi")
+    date_of_birth: Optional[str] = Field(default=None, description="Ngày sinh")
+    cccd: Optional[str] = Field(default=None, description="Số CCCD")
+    registration_image_path: Optional[str] = Field(default=None, description="Đường dẫn ảnh đăng ký")
 
 
 def _save_base64_image_to_history(img_b64: str) -> str:
@@ -65,6 +80,7 @@ async def register_face(
 
         if not result.get("error"):
             image_path = _save_base64_image_to_history(result.get("annotated_image", ""))
+            face_service.set_registration_image_path(result.get("person_id", ""), image_path)
             history_result = {
                 "person_id": result.get("person_id", ""),
                 "name": result.get("name", ""),
@@ -146,6 +162,37 @@ async def list_faces():
     return {
         "total_persons": len(face_service.list_persons()),
         "persons": face_service.list_persons(),
+    }
+
+
+@router.put("/face/person/{person_id}")
+async def update_face_person(person_id: str, payload: UpdateFacePersonRequest):
+    """Cập nhật thông tin người đã đăng ký khuôn mặt."""
+    info = {
+        "department": payload.department,
+        "role": payload.role,
+        "phone": payload.phone,
+        "address": payload.address,
+        "age": payload.age,
+        "date_of_birth": payload.date_of_birth,
+        "cccd": payload.cccd,
+    }
+    info = {key: value for key, value in info.items() if value is not None}
+
+    result = face_service.update_person(
+        person_id=person_id,
+        name=payload.name,
+        person_code=payload.person_code,
+        info=info if info else None,
+        registration_image_path=payload.registration_image_path,
+    )
+
+    if result.get("error"):
+        return {"error": "Person not found"}
+
+    return {
+        "message": "Updated person",
+        "person": result,
     }
 
 
