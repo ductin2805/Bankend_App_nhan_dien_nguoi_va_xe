@@ -7,7 +7,6 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, Form, Query
-from pydantic import BaseModel, Field
 
 from app.services.face_service import FaceRecognitionService
 from app.services.history_service import history_service
@@ -15,19 +14,6 @@ from app.utils.image_utils import load_image_from_bytes
 
 router = APIRouter(tags=["face"])
 face_service = FaceRecognitionService()
-
-
-class UpdateFacePersonRequest(BaseModel):
-    name: Optional[str] = Field(default=None, description="Tên người")
-    person_code: Optional[str] = Field(default=None, description="Mã nhân sự")
-    department: Optional[str] = Field(default=None, description="Phòng ban")
-    role: Optional[str] = Field(default=None, description="Chức vụ")
-    phone: Optional[str] = Field(default=None, description="Số điện thoại")
-    address: Optional[str] = Field(default=None, description="Địa chỉ")
-    age: Optional[str] = Field(default=None, description="Tuổi")
-    date_of_birth: Optional[str] = Field(default=None, description="Ngày sinh")
-    cccd: Optional[str] = Field(default=None, description="Số CCCD")
-    registration_image_path: Optional[str] = Field(default=None, description="Đường dẫn ảnh đăng ký")
 
 
 def _save_base64_image_to_history(img_b64: str) -> str:
@@ -42,6 +28,28 @@ def _save_base64_image_to_history(img_b64: str) -> str:
     try:
         with open(file_path, "wb") as f:
             f.write(base64.b64decode(img_b64))
+        return file_path.replace("\\", "/")
+    except Exception:
+        return ""
+
+
+def _save_uploaded_image_to_history(file: UploadFile, contents: bytes) -> str:
+    """Lưu ảnh upload thành file để dùng làm registration_image_path."""
+    if not contents:
+        return ""
+
+    history_results_dir = os.path.join("runs", "history_frames")
+    os.makedirs(history_results_dir, exist_ok=True)
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
+        ext = ".jpg"
+
+    file_name = f"{int(time.time() * 1000)}_{uuid.uuid4().hex}{ext}"
+    file_path = os.path.join(history_results_dir, file_name)
+    try:
+        with open(file_path, "wb") as f:
+            f.write(contents)
         return file_path.replace("\\", "/")
     except Exception:
         return ""
@@ -166,25 +174,44 @@ async def list_faces():
 
 
 @router.put("/face/person/{person_id}")
-async def update_face_person(person_id: str, payload: UpdateFacePersonRequest):
+async def update_face_person(
+    person_id: str,
+    file: Optional[UploadFile] = None,
+    name: Optional[str] = Form(default=None),
+    person_code: Optional[str] = Form(default=None),
+    department: Optional[str] = Form(default=None),
+    role: Optional[str] = Form(default=None),
+    phone: Optional[str] = Form(default=None),
+    address: Optional[str] = Form(default=None),
+    age: Optional[str] = Form(default=None),
+    date_of_birth: Optional[str] = Form(default=None),
+    cccd: Optional[str] = Form(default=None),
+    registration_image_path: Optional[str] = Form(default=None),
+):
     """Cập nhật thông tin người đã đăng ký khuôn mặt."""
+
+    uploaded_image_path = registration_image_path
+    if file is not None:
+        contents = await file.read()
+        uploaded_image_path = _save_uploaded_image_to_history(file, contents)
+
     info = {
-        "department": payload.department,
-        "role": payload.role,
-        "phone": payload.phone,
-        "address": payload.address,
-        "age": payload.age,
-        "date_of_birth": payload.date_of_birth,
-        "cccd": payload.cccd,
+        "department": department,
+        "role": role,
+        "phone": phone,
+        "address": address,
+        "age": age,
+        "date_of_birth": date_of_birth,
+        "cccd": cccd,
     }
     info = {key: value for key, value in info.items() if value is not None}
 
     result = face_service.update_person(
         person_id=person_id,
-        name=payload.name,
-        person_code=payload.person_code,
+        name=name,
+        person_code=person_code,
         info=info if info else None,
-        registration_image_path=payload.registration_image_path,
+        registration_image_path=uploaded_image_path,
     )
 
     if result.get("error"):

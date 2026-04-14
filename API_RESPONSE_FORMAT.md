@@ -885,21 +885,20 @@ Lấy danh sách người đã đăng ký khuôn mặt.
 ## 16. PUT /face/person/{person_id}
 Cập nhật thông tin người đã đăng ký khuôn mặt.
 
-### Request body:
-```json
-{
-  "name": "Nguyễn Văn A",
-  "person_code": "NV001",
-  "department": "Công nghệ thông tin",
-  "role": "Lập trình viên",
-  "phone": "0901234567",
-  "address": "123 Lê Lợi, Quận 1, TP.HCM",
-  "age": "31",
-  "date_of_birth": "1995-06-12",
-  "cccd": "079095001234",
-  "registration_image_path": "/runs/history_frames/1712721601222_xxx.jpg"
-}
-```
+### Request form-data:
+- `file` (optional): ảnh đăng ký mới (nếu upload ảnh mới thì server tự cập nhật `registration_image_path`).
+- `name` (optional): tên người.
+- `person_code` (optional): mã nhân sự.
+- `department` (optional): phòng ban.
+- `role` (optional): chức vụ.
+- `phone` (optional): số điện thoại.
+- `address` (optional): địa chỉ.
+- `age` (optional): tuổi.
+- `date_of_birth` (optional): ngày sinh.
+- `cccd` (optional): số CCCD.
+- `registration_image_path` (optional): đường dẫn ảnh có sẵn nếu không upload file mới.
+
+Lưu ý: endpoint này nhận `multipart/form-data`.
 
 ### Response format:
 ```json
