@@ -53,6 +53,8 @@ async def recognize_plate(file: UploadFile):
         from app.services.history_service import history_service
         history_service.add_entry({
             "type": "plate_recognition",
+            "method": "POST",
+            "path": "/recognize-plate",
             "summary": {
                 "plate_text": result.get("text", ""),
                 "confidence": result.get("confidence", 0.0),

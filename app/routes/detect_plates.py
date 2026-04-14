@@ -162,6 +162,8 @@ async def detect_plates(file: UploadFile):
 
         history_service.add_entry({
             "type": "image_detection",
+            "method": "POST",
+            "path": "/detect-plates",
             "summary": {
                 "total_vehicles": len(vehicles),
                 "plates_detected": len(plates_found),

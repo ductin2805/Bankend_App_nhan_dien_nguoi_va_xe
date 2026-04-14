@@ -134,6 +134,8 @@ class VideoProcessingService:
             # Log summary cho lịch sử
             history_service.add_entry({
                 "type": "video_processing",
+                "method": "POST",
+                "path": "/recognize-video",
                 "summary": {
                     "total_frames": total_frames,
                     "processed_frames": processed_frames,

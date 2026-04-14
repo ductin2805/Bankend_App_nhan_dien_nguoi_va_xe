@@ -82,6 +82,8 @@ async def detect(file: UploadFile, recognize_plates: bool = Query(False)):
 
         history_service.add_entry({
             "type": "object_detection",
+            "method": "POST",
+            "path": "/detect",
             "summary": {
                 "detections": len(result.get("detections", [])),
                 "plates_detected": len(result.get("plates", [])),
