@@ -17,6 +17,44 @@ Mở:
 http://localhost:8000
 ```
 
+## Deploy nhanh lên Railway
+
+Railway có thể deploy trực tiếp từ GitHub repo của bạn bằng Dockerfile hiện có.
+
+### 1) Chuẩn bị repo
+- Đảm bảo code mới nhất đã push lên nhánh main.
+- Repo đã có Dockerfile nên Railway sẽ build theo Docker.
+
+### 2) Tạo project trên Railway
+- Vào Railway, chọn New Project.
+- Chọn Deploy from GitHub Repo.
+- Chọn đúng repository backend này.
+
+### 3) Cấu hình biến môi trường
+- Thêm biến MACHINE_ACCESS_KEYS nếu bạn bật auth theo máy.
+
+Ví dụ:
+```json
+{"camera-01":"key-abc","camera-02":"key-def"}
+```
+
+### 4) Deploy
+- Railway tự build image từ Dockerfile.
+- Railway tự cấp PORT, app đã hỗ trợ chạy theo PORT nên không cần sửa lệnh start.
+
+### 5) Kiểm tra
+- Mở URL public Railway.
+- Test:
+```text
+GET /
+GET /health
+```
+
+### 6) Lưu ý quan trọng trên Railway
+- Dung lượng và RAM ở gói free có giới hạn, app ML có thể khởi động chậm.
+- Thư mục runs trong container có thể mất khi redeploy/restart nếu không có persistent volume.
+- Nếu cần lưu history/ảnh lâu dài, nên dùng external storage hoặc VM.
+
 ## Deploy lên Render / Railway / VPS
 
 ### Start command
