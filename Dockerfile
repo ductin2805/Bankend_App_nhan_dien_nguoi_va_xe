@@ -17,7 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Install CPU-only PyTorch to save ~1GB
+RUN pip install --upgrade pip && \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.1 torchvision==0.17.1 && \
+    pip install -r requirements.txt
+
+# Remove build dependencies to save space (~500MB)
+RUN apt-get remove -y build-essential g++ && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
