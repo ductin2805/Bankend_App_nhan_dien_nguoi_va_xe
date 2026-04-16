@@ -250,7 +250,7 @@ class FaceRecognitionService:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         person = {
             "person_id": person_id,
-            "machine_id": machine_scope,
+            "owner_machine_id": machine_scope,
             "name": name,
             "person_code": person_code,
             "info": info or {},
@@ -281,15 +281,14 @@ class FaceRecognitionService:
         annotated = image.copy()
         candidate_results = []
 
-        machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        persons = [person for person in self.data.get("persons", []) if (person.get("machine_id") or "default") == machine_scope]
+        # Use all persons from all machines (public database)
+        persons = self.data.get("persons", [])
 
         for candidate in face_candidates:
             x1, y1, x2, y2 = candidate["bbox"]
             descriptor = candidate["descriptor"]
 
-            best_person = None
-            best_score = -1.0
+            ranked_matches = []
             for person in persons:
                 person_descs = person.get("descriptors") or []
                 # Backward compatibility for old records
@@ -302,23 +301,37 @@ class FaceRecognitionService:
                 scores.sort(reverse=True)
                 top_k = scores[: min(3, len(scores))]
                 score = float(sum(top_k) / len(top_k)) if top_k else 0.0
-                if score > best_score:
-                    best_score = score
-                    best_person = person
+                ranked_matches.append(
+                    {
+                        "person_id": person.get("person_id", ""),
+                        "name": person.get("name", "Unknown"),
+                        "person_code": person.get("person_code", ""),
+                        "info": person.get("info", {}),
+                        "owner_machine_id": person.get("owner_machine_id") or person.get("machine_id") or "default",
+                        "match_score": round(score, 4),
+                        "is_known": score >= threshold,
+                    }
+                )
 
-            is_known = bool(best_person and best_score >= threshold)
+            ranked_matches.sort(key=lambda item: item.get("match_score", 0.0), reverse=True)
+            top_matches = ranked_matches[:3]
+            best_match = top_matches[0] if top_matches else None
+
+            best_score = float(best_match.get("match_score", 0.0)) if best_match else -1.0
+            is_known = bool(best_match and best_score >= threshold)
             label = "Unknown"
             person_info = None
             person_id = ""
 
-            if is_known and best_person:
-                person_id = best_person.get("person_id", "")
-                label = best_person.get("name", "Unknown")
+            if is_known and best_match:
+                person_id = best_match.get("person_id", "")
+                label = best_match.get("name", "Unknown")
                 person_info = {
                     "person_id": person_id,
-                    "name": best_person.get("name", ""),
-                    "person_code": best_person.get("person_code", ""),
-                    "info": best_person.get("info", {}),
+                    "name": best_match.get("name", ""),
+                    "person_code": best_match.get("person_code", ""),
+                    "info": best_match.get("info", {}),
+                    "owner_machine_id": best_match.get("owner_machine_id", "default"),
                 }
 
             candidate_results.append(
@@ -328,26 +341,44 @@ class FaceRecognitionService:
                     "match_score": round(best_score, 4),
                     "label": label,
                     "person": person_info,
+                    "top_matches": top_matches,
+                    "top_match_count": len(top_matches),
                 }
             )
 
-        best_result = None
         if candidate_results:
-            best_result = max(candidate_results, key=lambda item: item.get("match_score", 0.0))
-            bx1, by1, bx2, by2 = best_result["bbox"]
-            color = (0, 200, 0) if best_result.get("is_known") else (0, 0, 255)
-            cv2.rectangle(annotated, (bx1, by1), (bx2, by2), color, 2)
-            self._draw_text_with_unicode(
-                annotated,
-                f"{best_result.get('label', 'Unknown')} ({best_result.get('match_score', 0.0):.2f})",
-                (bx1, max(24, by1 - 10)),
-                color,
-            )
-            best_result.pop("label", None)
+            candidate_results.sort(key=lambda item: item.get("match_score", 0.0), reverse=True)
+            for result in candidate_results:
+                bx1, by1, bx2, by2 = result["bbox"]
+                color = (0, 200, 0) if result.get("is_known") else (0, 0, 255)
+                cv2.rectangle(annotated, (bx1, by1), (bx2, by2), color, 2)
+                top_matches = result.get("top_matches", [])
+                if top_matches:
+                    # Draw up to 3 ranked names for each detected face.
+                    base_y = max(24, by1 - 10)
+                    for idx, match in enumerate(top_matches[:3], start=1):
+                        line_y = base_y + ((idx - 1) * 22)
+                        self._draw_text_with_unicode(
+                            annotated,
+                            f"{idx}. {match.get('name', 'Unknown')} ({match.get('match_score', 0.0):.2f})",
+                            (bx1, line_y),
+                            color,
+                            font_size=18,
+                        )
+                else:
+                    self._draw_text_with_unicode(
+                        annotated,
+                        f"{result.get('label', 'Unknown')} ({result.get('match_score', 0.0):.2f})",
+                        (bx1, max(24, by1 - 10)),
+                        color,
+                    )
+                result.pop("label", None)
 
         return {
-            "total_faces": 1 if best_result else 0,
-            "faces": [best_result] if best_result else [],
+            "total_faces": len(candidate_results),
+            "total_matches": sum(len(face.get("top_matches", [])) for face in candidate_results),
+            "top_match_limit": 3,
+            "faces": candidate_results,
             "annotated_image": encode_image_to_base64(annotated),
             "threshold": threshold,
             "embedding_backend": self.embedding_backend,
@@ -357,7 +388,8 @@ class FaceRecognitionService:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         persons = []
         for person in self.data.get("persons", []):
-            if (person.get("machine_id") or "default") != machine_scope:
+            owner = person.get("owner_machine_id") or person.get("machine_id") or "default"
+            if owner != machine_scope:
                 continue
             persons.append(
                 {
@@ -367,6 +399,8 @@ class FaceRecognitionService:
                     "info": person.get("info", {}),
                     "registration_image_path": person.get("registration_image_path", ""),
                     "created_at": person.get("created_at"),
+                    "owner_machine_id": owner,
+                    "is_owner": True,
                 }
             )
         return persons
@@ -375,7 +409,11 @@ class FaceRecognitionService:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         persons = self.data.get("persons", [])
         for person in persons:
-            if person.get("person_id") == person_id and (person.get("machine_id") or "default") == machine_scope:
+            if person.get("person_id") == person_id:
+                # Only allow if current machine is the owner
+                owner = person.get("owner_machine_id", "default")
+                if owner != machine_scope:
+                    return False
                 person["registration_image_path"] = image_path or ""
                 self._save_db()
                 return True
@@ -393,8 +431,12 @@ class FaceRecognitionService:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         persons = self.data.get("persons", [])
         for person in persons:
-            if person.get("person_id") != person_id or (person.get("machine_id") or "default") != machine_scope:
+            if person.get("person_id") != person_id:
                 continue
+            # Only allow update if current machine is the owner
+            owner = person.get("owner_machine_id", "default")
+            if owner != machine_scope:
+                return {"error": "Không có quyền sửa hồ sơ này. Chỉ máy đăng ký mới được phép chỉnh sửa."}
 
             if name is not None:
                 person["name"] = name
@@ -422,9 +464,24 @@ class FaceRecognitionService:
     def delete_person(self, person_id: str, machine_id: str | None = None) -> bool:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         persons = self.data.get("persons", [])
-        new_persons = [p for p in persons if p.get("person_id") != person_id or (p.get("machine_id") or "default") != machine_scope]
-        if len(new_persons) == len(persons):
-            return False
+        
+        # Find person and check ownership
+        target_person = None
+        for person in persons:
+            if person.get("person_id") == person_id:
+                target_person = person
+                break
+        
+        if not target_person:
+            return False  # Person not found
+        
+        # Check if current machine is the owner
+        owner = target_person.get("owner_machine_id", "default")
+        if owner != machine_scope:
+            return False  # Not authorized to delete
+        
+        # Delete the person
+        new_persons = [p for p in persons if p.get("person_id") != person_id]
         self.data["persons"] = new_persons
         self._save_db()
         return True

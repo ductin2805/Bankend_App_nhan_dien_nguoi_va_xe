@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, UploadFile
 from app.utils.image_utils import load_image_from_bytes
+from app.services.owner_service import owner_lookup_service
 
 router = APIRouter(tags=["plate"])
 
@@ -46,6 +47,7 @@ async def recognize_plate(file: UploadFile):
         
         # Recognize plate
         result = plate_service.recognize_plate(img)
+        result["owner"] = owner_lookup_service.find_owner_by_plate(result.get("text", ""))
         
         print("PLATE RESULT:", result)
         
@@ -58,7 +60,8 @@ async def recognize_plate(file: UploadFile):
             "summary": {
                 "plate_text": result.get("text", ""),
                 "confidence": result.get("confidence", 0.0),
-                "is_valid": result.get("is_valid", False)
+                "is_valid": result.get("is_valid", False),
+                "owner_found": bool((result.get("owner") or {}).get("found", False)),
             }
         }, full_result=result)
         

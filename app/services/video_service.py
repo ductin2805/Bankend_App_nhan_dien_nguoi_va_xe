@@ -8,6 +8,7 @@ from ultralytics import YOLO
 from app.config import MODEL_PATH
 from app.services.plate_service import PlateRecognitionService
 from app.services.history_service import history_service
+from app.services.owner_service import owner_lookup_service
 
 
 class VideoProcessingService:
@@ -77,7 +78,8 @@ class VideoProcessingService:
                                         "count": 1,
                                         "confidence_sum": ocr_confidence,
                                         "confidence": round(ocr_confidence, 4),
-                                        "last_bbox": current_bbox
+                                        "last_bbox": current_bbox,
+                                        "owner": plate_data.get("owner"),
                                     }
                                     plates_order.append(plate_text)
                                 else:
@@ -98,6 +100,8 @@ class VideoProcessingService:
                                             4
                                         )
                                         plates_map[plate_text]["last_bbox"] = current_bbox
+                                        if not (plates_map[plate_text].get("owner") or {}).get("found"):
+                                            plates_map[plate_text]["owner"] = plate_data.get("owner")
                     processed_frames += 1
 
                 frame_idx += 1
@@ -177,6 +181,7 @@ class VideoProcessingService:
 
                 if class_id in self.vehicle_classes:
                     plate_result = self.plate_service.recognize_plate_from_coordinates(frame, xyxy)
+                    plate_result["owner"] = owner_lookup_service.find_owner_by_plate(plate_result.get("text", ""))
                     if plate_result.get("is_valid"):
                         vehicles.append({
                             "class_id": class_id,

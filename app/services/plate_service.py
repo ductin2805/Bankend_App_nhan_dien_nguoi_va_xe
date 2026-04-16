@@ -216,32 +216,53 @@ class PlateRecognitionService:
 
             combined_text = "".join(unique_texts)
             final_text = ""
-            formatted_candidate = VietnamPlateFormatter.format_plate(combined_text)
-            if formatted_candidate and VietnamPlateFormatter.validate_format(formatted_candidate):
-                final_text = formatted_candidate
-            else:
-                # Try each unique candidate individually
-                for candidate in unique_texts:
-                    formatted = VietnamPlateFormatter.format_plate(candidate)
-                    if formatted and VietnamPlateFormatter.validate_format(formatted):
-                        final_text = formatted
-                        break
-                # If still no valid result, try two-line join variants
-                if not final_text and len(unique_texts) > 1:
-                    for i in range(len(unique_texts) - 1):
-                        combo = unique_texts[i] + unique_texts[i+1]
-                        formatted = VietnamPlateFormatter.format_plate(combo)
+
+            # Ưu tiên ghép biển số 2 dòng kiểu moto: 67B2 + 84061 => 67B2-84061
+            header_tokens = []
+            number_tokens = []
+            for token in unique_texts:
+                token_clean = VietnamPlateFormatter.clean_text(token)
+                if re.fullmatch(r"\d{2}[A-Z]\d", token_clean):
+                    header_tokens.append(token_clean)
+                elif re.fullmatch(r"\d{5}", token_clean):
+                    number_tokens.append(token_clean)
+
+            if header_tokens and number_tokens:
+                two_line_candidate = f"{header_tokens[0]}-{number_tokens[0]}"
+                if VietnamPlateFormatter.validate_format(two_line_candidate):
+                    final_text = two_line_candidate
+
+            # Fallback pipeline cũ để giữ tương thích
+            if not final_text:
+                formatted_candidate = VietnamPlateFormatter.format_plate(combined_text)
+                if formatted_candidate and VietnamPlateFormatter.validate_format(formatted_candidate):
+                    final_text = formatted_candidate
+                else:
+                    # Try each unique candidate individually
+                    for candidate in unique_texts:
+                        formatted = VietnamPlateFormatter.format_plate(candidate)
                         if formatted and VietnamPlateFormatter.validate_format(formatted):
                             final_text = formatted
                             break
-                if not final_text:
-                    final_text = re.sub(r'[^A-Z0-9\-]', '', combined_text)
+                    # If still no valid result, try two-line join variants
+                    if not final_text and len(unique_texts) > 1:
+                        for i in range(len(unique_texts) - 1):
+                            combo = unique_texts[i] + unique_texts[i + 1]
+                            formatted = VietnamPlateFormatter.format_plate(combo)
+                            if formatted and VietnamPlateFormatter.validate_format(formatted):
+                                final_text = formatted
+                                break
+                    if not final_text:
+                        final_text = re.sub(r'[^A-Z0-9\-]', '', combined_text)
 
             avg_confidence = sum(all_confidences) / len(all_confidences)
             is_valid = bool(final_text and VietnamPlateFormatter.validate_format(final_text))
             
+            # Trả về text không gạch ngang để dễ so sánh
+            text_no_dash = final_text.replace("-", "")
+            
             return {
-                "text": final_text,
+                "text": text_no_dash,
                 "confidence": round(avg_confidence, 4),
                 "is_valid": is_valid,
                 "details": [{"text": txt.upper(), "conf": round(conf, 4)} 
@@ -312,10 +333,13 @@ class PlateRecognitionService:
         # Giữ lại dấu - cho định dạng biển số
         final_text = re.sub(r'[^A-Z0-9\-]', '', final_text)
         
+        # Trả về text không gạch ngang để dễ so sánh
+        text_no_dash = final_text.replace("-", "")
+        
         avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
         
         return {
-            "text": final_text,
+            "text": text_no_dash,
             "confidence": round(avg_confidence, 4),
             "details": [{"text": txt.upper(), "conf": round(conf, 4)} 
                        for txt, conf in zip(all_texts, all_confidences)]

@@ -67,6 +67,8 @@ async def register_face(
     age: str = Form(""),
     date_of_birth: str = Form(""),
     cccd: str = Form(""),
+    plate_number: str = Form(""),
+    vehicle_plates: str = Form(""),
 ):
     """Đăng ký khuôn mặt và thông tin người."""
     try:
@@ -83,6 +85,8 @@ async def register_face(
             "age": age,
             "date_of_birth": date_of_birth,
             "cccd": cccd,
+            "plate_number": plate_number,
+            "vehicle_plates": vehicle_plates,
         }
         result = face_service.register_person(img, name=name, person_code=person_code, info=info)
 
@@ -186,6 +190,8 @@ async def update_face_person(
     age: Optional[str] = Form(default=None),
     date_of_birth: Optional[str] = Form(default=None),
     cccd: Optional[str] = Form(default=None),
+    plate_number: Optional[str] = Form(default=None),
+    vehicle_plates: Optional[str] = Form(default=None),
     registration_image_path: Optional[str] = Form(default=None),
 ):
     """Cập nhật thông tin người đã đăng ký khuôn mặt."""
@@ -203,6 +209,8 @@ async def update_face_person(
         "age": age,
         "date_of_birth": date_of_birth,
         "cccd": cccd,
+        "plate_number": plate_number,
+        "vehicle_plates": vehicle_plates,
     }
     info = {key: value for key, value in info.items() if value is not None}
 
@@ -215,7 +223,7 @@ async def update_face_person(
     )
 
     if result.get("error"):
-        return {"error": "Person not found"}
+        return result  # Return error as-is (may be permission error or not found)
 
     return {
         "message": "Updated person",
@@ -228,5 +236,10 @@ async def delete_face_person(person_id: str):
     """Xóa một người khỏi danh bạ khuôn mặt."""
     deleted = face_service.delete_person(person_id)
     if not deleted:
+        # Determine if it's a permission issue or not found
+        persons = face_service.data.get("persons", [])
+        person = next((p for p in persons if p.get("person_id") == person_id), None)
+        if person:
+            return {"error": "Không có quyền xóa hồ sơ này. Chỉ máy đăng ký mới được phép xóa."}
         return {"error": "Person not found"}
     return {"message": "Deleted person", "person_id": person_id}

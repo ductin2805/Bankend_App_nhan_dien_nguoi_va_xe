@@ -6,6 +6,7 @@ import base64
 import uuid
 from fastapi import APIRouter, UploadFile
 from app.services.detection_service import DetectionService
+from app.services.owner_service import owner_lookup_service
 from app.utils.image_utils import load_image_from_bytes
 
 router = APIRouter(tags=["plate-detection"])
@@ -108,6 +109,7 @@ async def detect_plates(file: UploadFile):
                 if class_id in vehicle_classes:
                     # Try to recognize plate
                     plate_result = plate_service.recognize_plate_from_coordinates(img, xyxy)
+                    owner = owner_lookup_service.find_owner_by_plate(plate_result.get("text", ""))
                     
                     plate_detected = bool(plate_result.get('text'))
                     
@@ -120,7 +122,8 @@ async def detect_plates(file: UploadFile):
                             "text": plate_result.get('text', ''),
                             "confidence": plate_result.get('confidence', 0.0),
                             "detected": plate_detected,
-                            "error": plate_result.get('error')
+                            "error": plate_result.get('error'),
+                            "owner": owner,
                         }
                     })
         
