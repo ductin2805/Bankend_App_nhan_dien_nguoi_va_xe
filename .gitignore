@@ -50,3 +50,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Deploy / CI artifacts
+Dockerfile
+.dockerignore
+DEPLOY_CLOUD.md
+.github/workflows/
