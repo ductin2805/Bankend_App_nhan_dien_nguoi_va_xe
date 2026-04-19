@@ -25,6 +25,7 @@ API Response Format Documentation
 - `DELETE /history/all`: Dùng dọn sạch toàn bộ lịch sử.
 - `POST /face/register`: Dùng đăng ký hồ sơ khuôn mặt + thông tin người.
 - `POST /face/recognize`: Dùng nhận diện khuôn mặt từ ảnh và trả thông tin người khớp.
+- `POST /chat/gemini`: Dùng chat bot AI theo flow Rule cứng -> Cache -> Gemini -> Fallback.
 - `GET /face/persons`: Dùng hiển thị danh bạ người đã đăng ký.
 - `DELETE /face/person/{person_id}`: Dùng xóa một hồ sơ người khỏi danh bạ khuôn mặt.
 - Các JSON response dưới đây giữ nguyên key cũ để Flutter không bị vỡ; chỉ bổ sung thêm field chi tiết để render UI và debug dễ hơn.
@@ -1005,7 +1006,7 @@ Xóa toàn bộ lịch sử.
 - `file`: ảnh khuôn mặt
 - `name`: tên người
 - `person_code`: mã nhân sự (optional)
-- `department`: phòng ban (optional)
+- `department`: Nơi làm việc (optional)
 - `role`: chức vụ (optional)
 - `phone`: số điện thoại (optional)
 - `address`: địa chỉ (optional)
@@ -1252,6 +1253,75 @@ Xóa một người khỏi danh bạ khuôn mặt.
 ### Ý nghĩa các field chính:
 - `person_id`: id của người vừa xóa.
 - Nếu không phải owner hoặc person không tồn tại, sẽ nhận error.
+
+## 18. POST /chat/gemini
+Chat bot AI cho hỏi đáp nghiệp vụ.
+
+Flow xử lý hiện tại:
+- `Rule cứng` -> `Cache` -> `Gemini` -> `Fallback`
+
+### Request body:
+```json
+{
+  "message": "api detect-plates"
+}
+```
+
+### Response format (source = rule):
+```json
+{
+  "reply": "POST /detect-plates: detect xe trong anh va OCR bien so cho tung xe, kem owner neu tim thay.",
+  "source": "rule",
+  "cached": false
+}
+```
+
+### Response format (source = cache):
+```json
+{
+  "reply": "...noi dung da cache...",
+  "source": "cache",
+  "cached": true
+}
+```
+
+### Response format (source = gemini):
+```json
+{
+  "reply": "...noi dung tu Gemini...",
+  "source": "gemini",
+  "cached": false
+}
+```
+
+### Response format (source = fallback, ví dụ thiếu key):
+```json
+{
+  "reply": "Tam thoi toi khong ket noi duoc AI. Ban vui long thu lai sau it phut.",
+  "source": "fallback",
+  "cached": false,
+  "error": "Chua cau hinh GEMINI_API_KEY trong environment"
+}
+```
+
+### Response format (source = fallback, lỗi Gemini API):
+```json
+{
+  "reply": "Tam thoi toi khong ket noi duoc AI. Ban vui long thu lai sau it phut.",
+  "source": "fallback",
+  "cached": false,
+  "error": "Gemini API tra ve loi",
+  "status_code": 429,
+  "details": "...raw error body..."
+}
+```
+
+### Ý nghĩa các field chính:
+- `reply`: nội dung trả lời cuối cùng cho người dùng.
+- `source`: nguồn trả lời (`rule`, `cache`, `gemini`, `fallback`).
+- `cached`: `true` nếu câu trả lời lấy từ cache.
+- `error`: thông tin lỗi kỹ thuật (chỉ có khi fallback do lỗi).
+- `status_code`, `details`: chỉ xuất hiện khi Gemini trả về HTTP error.
 
 ## Tóm tắt nhanh dữ liệu trả về trong lịch sử
 - `GET /history`: trả danh sách entry; mỗi entry có `id`, `timestamp`, `type`, `summary`, `representative_image_path` và có thể có `method`, `path`, `plates_found`, `full_result`.
