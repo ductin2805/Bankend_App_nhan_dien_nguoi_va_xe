@@ -4,6 +4,7 @@ from app.routes.detect import router as detect_router
 from app.routes.plate import router as plate_router
 from app.routes.detect_plates import router as detect_plates_router
 from app.routes.realtime import router as realtime_router
+from app.routes.live_camera import router as live_camera_router
 from app.routes.history import router as history_router
 from app.routes.face import router as face_router
 from app.routes.chat import router as chat_router
@@ -14,6 +15,7 @@ routers = [
 	plate_router,
 	detect_plates_router,
 	realtime_router,
+	live_camera_router,
 	history_router,
 	face_router,
 	chat_router,

@@ -299,8 +299,9 @@ class FaceRecognitionService:
 
                 scores = [self._cosine_similarity(descriptor, d) for d in person_descs]
                 scores.sort(reverse=True)
+                top_score = scores[0] if scores else 0.0
                 top_k = scores[: min(3, len(scores))]
-                score = float(sum(top_k) / len(top_k)) if top_k else 0.0
+                score = float(top_score)
                 ranked_matches.append(
                     {
                         "person_id": person.get("person_id", ""),

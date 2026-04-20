@@ -41,6 +41,10 @@ API Response Format Documentation
 ## 1. POST /recognize-video
 Nhận diện xe và biển số từ video upload.
 
+### Query params:
+- `frame_skip` (int, default `30`): Bỏ qua số frame giữa mỗi lần xử lý.
+- `max_frames` (int, default `50`): Giới hạn số frame được xử lý.
+
 ### Response format:
 {
   "video_info": {
@@ -195,6 +199,155 @@ Nhận diện xe và biển số từ video upload.
 {
   "error": "Không mở được video."
 }
+
+
+## 1.1. POST /recognize-live-frame
+Nhận diện xe và biển số từ 1 frame ảnh camera realtime.
+
+### Query params:
+- `include_annotated` (bool, default `true`): Có trả `annotated_frame` base64 hay không.
+- `save_history` (bool, default `true`): Có lưu vào lịch sử chung hay không.
+- `history_only_when_detected` (bool, default `true`): Chỉ lưu lịch sử khi frame có biển số hoặc có khuôn mặt detect được.
+- `detect_conf` (float, default `0.25`): Ngưỡng confidence detect xe cho realtime.
+- `detect_imgsz` (int, default `640`): Kích thước input YOLO khi infer realtime.
+- `include_candidates` (bool, default `true`): Trả thêm danh sách candidate OCR theo nhiều ROI.
+- `detect_faces` (bool, default `true`): Bật nhận diện khuôn mặt trong frame live.
+- `face_threshold` (float, default `0.55`): Ngưỡng nhận diện khuôn mặt.
+- `include_face_annotated` (bool, default `false`): Trả thêm ảnh annotate khuôn mặt.
+- `save_history_image` (bool, default `true`): Lưu ảnh đại diện của frame vào `runs/history_frames`.
+
+### Response format:
+{
+  "source": "live_camera",
+  "timestamp": 1776666666.123,
+  "summary": {
+    "total_vehicles": 1,
+    "total_plates": 1,
+    "plates_found": ["67B2-84501"],
+    "stable_plates": ["67B2-84501"],
+    "total_faces": 1,
+    "known_faces": 1,
+    "processing_time_ms": 86.42
+  },
+  "vehicles": [
+    {
+      "class_id": 3,
+      "class_name": "motorcycle",
+      "confidence": 0.7123,
+      "bbox": [101.2, 200.7, 402.8, 799.1],
+      "plate": {
+        "text": "67B284501",
+        "confidence": 0.8123,
+        "is_valid": true,
+        "owner": {
+          "found": false,
+          "person_id": "",
+          "name": "",
+          "person_code": "",
+          "info": {},
+          "owner_machine_id": "",
+          "plate": "67B2-84501",
+          "match_type": "none"
+        },
+        "details": [
+          {"text": "67B2", "conf": 0.89},
+          {"text": "84501", "conf": 0.73}
+        ],
+        "candidates": [
+          {"roi": "lower_45_expand_8", "text": "67B284501", "confidence": 0.8123, "is_valid": true},
+          {"roi": "full_bbox", "text": "67B2845", "confidence": 0.5521, "is_valid": false}
+        ]
+      }
+    }
+  ],
+  "faces": [
+    {
+      "bbox": [120, 80, 280, 300],
+      "is_known": true,
+      "match_score": 0.9132,
+      "top_match_count": 2,
+      "top_matches": [
+        {"person_id": "c2f6...", "name": "Nguyễn Văn A", "match_score": 0.9132, "is_known": true}
+      ],
+      "person": {
+        "person_id": "c2f6...",
+        "name": "Nguyễn Văn A",
+        "person_code": "NV001",
+        "info": {},
+        "owner_machine_id": "camera-01"
+      }
+    }
+  ],
+  "history": {
+    "storage": "common_history",
+    "saved": true,
+    "entry_id": "1776666666123",
+    "representative_image_path": "/runs/history_frames/1776666666123_abc.jpg"
+  },
+  "annotated_frame": "iVBORw0KGgoAAAANS...",
+  "face_annotated_frame": "iVBORw0KGgoAAAANS..."
+}
+
+### Ý nghĩa các field chính:
+- `summary`: dữ liệu tóm tắt để render card realtime nhanh.
+- `summary.stable_plates`: biển số đã ổn định qua nhiều frame gần nhất (giảm nhiễu 1-frame).
+- `summary.total_faces`, `summary.known_faces`: tổng mặt detect được và số mặt nhận diện thành công.
+- `summary.processing_time_ms`: thời gian xử lý server cho 1 frame.
+- `history.saved`: cho biết frame này có được ghi vào lịch sử chung hay không.
+- `history.entry_id`: id entry trong `GET /history/{entry_id}` nếu có lưu.
+- `history.representative_image_path`: đường dẫn ảnh đại diện đã lưu để mở từ history.
+- `vehicles[].plate.candidates`: các phương án OCR từ nhiều vùng crop, hữu ích để debug realtime.
+- `annotated_frame`: chỉ có khi `include_annotated=true`.
+- `faces`: danh sách kết quả nhận diện khuôn mặt trong cùng frame live.
+- `face_annotated_frame`: chỉ có khi `include_face_annotated=true` và bật `detect_faces=true`.
+
+### Hoặc nếu lỗi:
+{
+  "error": "Decode ảnh lỗi"
+}
+
+
+## 1.2. GET /recognize-live-frame/options
+Trả về dải thông số gợi ý để Flutter dựng màn hình cài đặt live camera.
+
+### Response format:
+{
+  "live_camera": {
+    "resolution_preset": {
+      "default": "high",
+      "options": ["medium", "high", "veryHigh"],
+      "recommended": ["high", "veryHigh"],
+      "notes": "Ưu tiên high/veryHigh để biển số đủ nét"
+    },
+    "fps": {"min": 8, "max": 24, "default": 15, "recommended": [12, 15, 20], "notes": "FPS cao hơn tăng tải CPU/network"},
+    "jpeg_quality": {"min": 70, "max": 95, "default": 85, "recommended": [80, 85, 90], "notes": "Không nên dưới 75 để tránh mờ biển số"},
+    "zoom": {"min": 1.0, "max": 3.0, "default": 1.4, "recommended": [1.2, 1.4, 1.8], "notes": "Zoom vừa phải giúp biển số lớn hơn nhưng tránh rung"},
+    "exposure_offset": {"min": -1.5, "max": 1.5, "default": 0.0, "recommended": [-0.3, 0.0, 0.3], "notes": "Tăng nhẹ khi thiếu sáng, giảm khi bị chói"}
+  },
+  "live_query": {
+    "include_annotated": {"default": true, "notes": "Trả ảnh annotate để Flutter preview"},
+    "save_history": {"default": true, "notes": "Lưu lịch sử cho frame live"},
+    "history_only_when_detected": {"default": true, "notes": "Chỉ lưu khi có biển số hoặc mặt detect được"},
+    "detect_conf": {"min": 0.05, "max": 0.8, "default": 0.25, "recommended": [0.2, 0.25, 0.3]},
+    "detect_imgsz": {"min": 320, "max": 1280, "default": 640, "recommended": [640, 768, 960]},
+    "include_candidates": {"default": true, "notes": "Trả thêm candidate OCR theo nhiều ROI"},
+    "detect_faces": {"default": true, "notes": "Bật nhận diện khuôn mặt cho live frame"},
+    "face_threshold": {"min": 0.0, "max": 1.0, "default": 0.55, "recommended": [0.5, 0.55, 0.6]},
+    "include_face_annotated": {"default": false, "notes": "Chỉ trả ảnh annotate mặt khi cần debug"},
+    "save_history_image": {"default": true, "notes": "Lưu ảnh đại diện vào runs/history_frames"}
+  },
+  "presets": {
+    "balanced": {"flutter": {"resolution_preset": "high", "fps": 15, "jpeg_quality": 85, "zoom": 1.4, "exposure_offset": 0.0}, "backend": {"detect_conf": 0.2, "detect_imgsz": 960, "face_threshold": 0.55}},
+    "accuracy_first": {"flutter": {"resolution_preset": "veryHigh", "fps": 12, "jpeg_quality": 90, "zoom": 1.6, "exposure_offset": 0.1}, "backend": {"detect_conf": 0.15, "detect_imgsz": 1024, "face_threshold": 0.5}},
+    "performance_first": {"flutter": {"resolution_preset": "high", "fps": 20, "jpeg_quality": 80, "zoom": 1.2, "exposure_offset": 0.0}, "backend": {"detect_conf": 0.25, "detect_imgsz": 768, "face_threshold": 0.6}},
+    "low_light": {"flutter": {"resolution_preset": "veryHigh", "fps": 10, "jpeg_quality": 90, "zoom": 1.3, "exposure_offset": 0.3}, "backend": {"detect_conf": 0.15, "detect_imgsz": 1024, "face_threshold": 0.5}}
+  }
+}
+
+### Ý nghĩa các field chính:
+- `live_camera`: dải thông số để render slider/dropdown trong app Flutter.
+- `live_query`: dải thông số query truyền vào API live camera.
+- `presets`: cấu hình mẫu theo mục tiêu (cân bằng, ưu tiên độ chính xác, ưu tiên hiệu năng, thiếu sáng).
 
 
 ## 2. POST /recognize-plate

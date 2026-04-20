@@ -284,6 +284,7 @@ class HistoryService:
     def _type_to_endpoint(entry_type: str) -> str:
         mapping = {
             "video_processing": "/recognize-video",
+            "live_camera_frame": "/recognize-live-frame",
             "image_detection": "/detect-plates",
             "plate_recognition": "/recognize-plate",
             "object_detection": "/detect",

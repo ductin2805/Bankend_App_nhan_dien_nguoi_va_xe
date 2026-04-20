@@ -11,6 +11,15 @@ from app.routes import routers
 from app.services.history_service import history_service
 
 
+SELF_LOGGED_PATHS = {
+    "/recognize-video",
+    "/recognize-live-frame",
+    "/detect-plates",
+    "/recognize-plate",
+    "/detect",
+}
+
+
 def create_app() -> FastAPI:
     """Create và configure FastAPI app."""
     app = FastAPI(
@@ -60,8 +69,9 @@ def create_app() -> FastAPI:
             response = await call_next(request)
             process_time = time.time() - start_time
         
-            # Log các API chính
-            if request.url.path in ["/recognize-video", "/detect-plates", "/recognize-plate", "/detect"]:
+            # Chi log middleware metadata cho request loi de tranh trung entry
+            # voi log ket qua chi tiet da duoc ghi trong service/route.
+            if request.url.path in SELF_LOGGED_PATHS and response.status_code >= 400:
                 request_meta = {
                     "method": request.method,
                     "path": request.url.path,

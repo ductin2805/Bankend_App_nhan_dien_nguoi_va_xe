@@ -358,47 +358,54 @@ class PlateRecognitionService:
         """
         try:
             x1, y1, x2, y2 = map(int, box_xyxy)
-            
+            img_h, img_w = image.shape[:2]
+
+            # Clamp bbox vào biên ảnh
+            x1 = max(0, min(img_w, x1))
+            x2 = max(0, min(img_w, x2))
+            y1 = max(0, min(img_h, y1))
+            y2 = max(0, min(img_h, y2))
+
+            if x2 <= x1 or y2 <= y1:
+                return {"text": "", "confidence": 0.0, "is_valid": False}
+
             height = y2 - y1
             width = x2 - x1
-            
-            # Crop vùng biển số trong phần dưới bbox xe
-            # Cố gắng lấy đủ hai dòng biển số: lấy phần dưới 45% của bbox và mở rộng ngang
+
+            # Legacy fast path: thử 1 ROI chính trước, chỉ fallback sang full bbox nếu cần.
             top = y1 + int(height * 0.45)
             bottom = y2
             left = x1 - int(width * 0.08)
             right = x2 + int(width * 0.08)
-            
+
             left = max(0, left)
             top = max(0, top)
-            right = min(image.shape[1], right)
-            bottom = min(image.shape[0], bottom)
-            
+            right = min(img_w, right)
+            bottom = min(img_h, bottom)
+
             plate_roi = image[top:bottom, left:right]
-            
+
             if plate_roi.size == 0:
                 plate_roi = image[y1:y2, x1:x2]
-            
+
             if plate_roi.size == 0:
-                plate_roi = image[y1:y2, x1:x2]
-            
-            # Recognize text
+                return {"text": "", "confidence": 0.0, "is_valid": False}
+
             result = self.recognize_plate(plate_roi)
-            
-            # If only top row found, fallback to full vehicle crop and bottom-half crop
-            if result.get("text") and len(result.get("text")) <= 4:
+
+            # Nếu chỉ ra được chuỗi rất ngắn thì thử lại full bbox để cải thiện độ ổn định.
+            if result.get("text") and len(str(result.get("text", ""))) <= 4:
                 fallback_roi = image[y1:y2, x1:x2]
                 fallback_result = self.recognize_plate(fallback_roi)
-                if fallback_result.get("text") and len(fallback_result.get("text")) > len(result.get("text")):
+                if fallback_result.get("text") and len(str(fallback_result.get("text", ""))) > len(str(result.get("text", ""))):
                     result = fallback_result
-            
+
             return result
-            
-            return result
-        
+
         except Exception as e:
             return {
                 "text": "",
                 "confidence": 0.0,
                 "error": str(e)
             }
+
