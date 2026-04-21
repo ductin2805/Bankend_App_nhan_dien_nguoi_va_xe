@@ -28,8 +28,8 @@ class VideoProcessingService:
     def process_video_bytes(
         self,
         video_bytes: bytes,
-        frame_skip: int = 10,
-        max_frames: int = 20,
+        frame_skip: int = 30,
+        max_frames: int = 50,
     ) -> dict:
         """Xử lý video upload và trả về kết quả nhận diện theo frame."""
         start_time = time.time()

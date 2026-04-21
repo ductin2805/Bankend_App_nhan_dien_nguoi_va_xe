@@ -9,7 +9,7 @@ router = APIRouter(tags=["realtime"])
 async def recognize_video(
     file: UploadFile,
     frame_skip: int = Query(30, ge=1, description="Số frame bỏ qua giữa mỗi lần xử lý"),
-    max_frames: int = Query(5, ge=1, description="Số frame tối đa sẽ xử lý"),
+    max_frames: int = Query(50, ge=1, description="Số frame tối đa sẽ xử lý"),
 ):
     """Nhận diện xe và biển số từ video upload."""
     contents = await file.read()

@@ -11,7 +11,7 @@ def test_video_endpoint():
     try:
         with open(video_path, 'rb') as f:
             files = {'file': f}
-            params = {'frame_skip': 10, 'max_frames': 5}
+            params = {'frame_skip': 30, 'max_frames': 50}
             
             response = requests.post(
                 'http://localhost:8000/recognize-video',
@@ -30,7 +30,7 @@ def test_video_endpoint():
     except FileNotFoundError:
         print(f"Video file not found: {video_path}")
         print("Create a test video file or use curl:")
-        print("curl -X POST 'http://localhost:8000/recognize-video?frame_skip=10&max_frames=5' -F 'file=@test_video.mp4'")
+        print("curl -X POST 'http://localhost:8000/recognize-video?frame_skip=30&max_frames=50' -F 'file=@test_video.mp4'")
 
 if __name__ == "__main__":
     test_video_endpoint()
