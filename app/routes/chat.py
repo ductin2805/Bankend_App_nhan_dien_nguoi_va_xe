@@ -5,6 +5,7 @@ import os
 import re
 import time
 import unicodedata
+
 import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -19,6 +20,7 @@ _RULES_CACHE: dict[str, object] = {
     "mtime": None,
     "exact_rules": {},
     "contains_rules": [],
+    "scope_rules": {},
 }
 
 _DEFAULT_EXACT_RULES = {
@@ -34,6 +36,225 @@ _DEFAULT_CONTAINS_RULES = [
         "reply": "API yeu cau header X-Machine-Id va X-Machine-Key cho cac route private. Cac route public gom /, /health, /docs, /redoc, /openapi.json, /chat/gemini.",
     },
 ]
+
+_OUT_OF_SCOPE_REPLY = (
+    "Mình chỉ hỗ trợ câu hỏi liên quan đến hệ thống nhận diện, API và luật giao thông. "
+    "Bạn vui lòng hỏi đúng phạm vi này."
+)
+
+_DEFAULT_SCOPE_RULES = {
+    "in_scope_keywords": [
+        "detect",
+        "detect plates",
+        "detect-plates",
+        "recognize plate",
+        "recognize-plate",
+        "recognize video",
+        "recognize-video",
+        "face",
+        "history",
+        "owner",
+        "api",
+        "machine id",
+        "machine key",
+        "x-machine-id",
+        "x-machine-key",
+        "base url",
+        "baseurl",
+        "server",
+        "ip",
+        "flutter",
+        "gemini",
+        "chatbot",
+        "sqlite",
+        "database",
+        "ocr",
+        "plate",
+        "biển số",
+    ],
+    "legal_sensitive_keywords": [
+        "luat giao thong",
+        "luật giao thông",
+        "vi pham giao thong",
+        "vi phạm giao thông",
+        "mu bao hiem",
+        "mũ bảo hiểm",
+        "vuot den do",
+        "vượt đèn đỏ",
+        "nong do con",
+        "nồng độ cồn",
+        "toc do",
+        "tốc độ",
+        "cao toc",
+        "cao tốc",
+        "nguoc chieu",
+        "ngược chiều",
+        "lang lach",
+        "lạng lách",
+        "tai nan",
+        "tai nạn",
+        "mo cua",
+        "mở cửa",
+        "hang hoa",
+        "hàng hóa",
+        "gplx",
+        "giay to",
+        "giấy tờ",
+        "bao hiem",
+        "bảo hiểm",
+        "vneid",
+        "phat",
+        "phạt",
+    ],
+    "out_of_scope_reply": _OUT_OF_SCOPE_REPLY,
+}
+
+_SCOPE_CACHE: dict[str, object] = {
+    "mtime": None,
+    "scope_rules": {},
+}
+
+_ALLOWED_SCOPE_KEYWORDS = [
+    # Hệ thống nhận diện / API / vận hành
+    "detect",
+    "detect plates",
+    "detect-plates",
+    "recognize plate",
+    "recognize-plate",
+    "recognize video",
+    "recognize-video",
+    "face",
+    "history",
+    "owner",
+    "api",
+    "machine id",
+    "machine key",
+    "x-machine-id",
+    "x-machine-key",
+    "base url",
+    "baseurl",
+    "server",
+    "ip",
+    "flutter",
+    "gemini",
+    "chatbot",
+    "sqlite",
+    "database",
+    "ocr",
+    "plate",
+    "biển số",
+    # Luật giao thông
+    "luat giao thong",
+    "luật giao thông",
+    "vi pham giao thong",
+    "vi phạm giao thông",
+    "mu bao hiem",
+    "mũ bảo hiểm",
+    "vuot den do",
+    "vượt đèn đỏ",
+    "nong do con",
+    "nồng độ cồn",
+    "toc do",
+    "tốc độ",
+    "cao toc",
+    "cao tốc",
+    "nguoc chieu",
+    "ngược chiều",
+    "lang lach",
+    "lạng lách",
+    "tai nan",
+    "tai nạn",
+    "mo cua",
+    "mở cửa",
+    "hang hoa",
+    "hàng hóa",
+    "gplx",
+    "giay to",
+    "giấy tờ",
+    "bao hiem",
+    "bảo hiểm",
+    "vneid",
+    "phat",
+    "phạt",
+]
+
+
+def _load_scope_rules() -> dict[str, object]:
+    """Load scope rules tu file JSON, cache theo mtime de giam I/O."""
+    rules_file = os.getenv(
+        "CHAT_RULES_FILE",
+        os.path.join(os.path.dirname(__file__), "..", "rules", "chat_rules.json"),
+    )
+    rules_file = os.path.abspath(rules_file)
+
+    try:
+        mtime = os.path.getmtime(rules_file)
+    except OSError:
+        return _DEFAULT_SCOPE_RULES
+
+    if _SCOPE_CACHE.get("mtime") == mtime:
+        return _SCOPE_CACHE.get("scope_rules", _DEFAULT_SCOPE_RULES)
+
+    try:
+        with open(rules_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        scope_rules_raw = data.get("scope_rules", {}) if isinstance(data, dict) else {}
+        scope_rules: dict[str, object] = dict(_DEFAULT_SCOPE_RULES)
+
+        if isinstance(scope_rules_raw, dict):
+            for key in ("in_scope_keywords", "legal_sensitive_keywords"):
+                raw_keywords = scope_rules_raw.get(key, [])
+                if isinstance(raw_keywords, list):
+                    keywords = [_normalize_text(str(keyword)) for keyword in raw_keywords if str(keyword).strip()]
+                    keywords = [keyword for keyword in keywords if keyword]
+                    if keywords:
+                        scope_rules[key] = sorted(set(keywords), key=len, reverse=True)
+
+            reply = str(scope_rules_raw.get("out_of_scope_reply", "")).strip()
+            if reply:
+                scope_rules["out_of_scope_reply"] = reply
+
+        _SCOPE_CACHE["mtime"] = mtime
+        _SCOPE_CACHE["scope_rules"] = scope_rules
+        return scope_rules
+    except Exception:
+        return _DEFAULT_SCOPE_RULES
+
+
+def _classify_scope(normalized_text: str) -> str:
+    """Phan loai cau hoi thanh in_scope, legal_sensitive hoac out_of_scope."""
+    if not normalized_text:
+        return "out_of_scope"
+
+    token_set = _text_tokens(normalized_text)
+    scope_rules = _load_scope_rules()
+
+    for keyword in scope_rules.get("legal_sensitive_keywords", []):
+        if _keyword_hit(keyword, normalized_text, token_set):
+            return "legal_sensitive"
+
+    for keyword in scope_rules.get("in_scope_keywords", []):
+        if _keyword_hit(keyword, normalized_text, token_set):
+            return "in_scope"
+
+    return "out_of_scope"
+
+
+def _is_in_scope(normalized_text: str) -> bool:
+    return _classify_scope(normalized_text) != "out_of_scope"
+
+
+def _build_gemini_prompt(user_message: str) -> str:
+    """Ràng buộc Gemini chỉ trả lời trong phạm vi hệ thống nhận diện và luật giao thông."""
+    return (
+        "Bạn là trợ lý cho hệ thống nhận diện và luật giao thông. "
+        "Chỉ trả lời các câu hỏi liên quan đến: detect, detect-plates, recognize-plate, recognize-video, face, history, "
+        "xác thực máy, IP/baseUrl, Flutter integration, Gemini của hệ thống, và luật giao thông. "
+        "Nếu câu hỏi ngoài phạm vi trên, hãy trả lời đúng một câu từ chối ngắn gọn. "
+        "Không tự suy đoán, không lan man, không trả lời chủ đề ngoài lề.\n\n"
+        f"Câu hỏi: {user_message}"
+    )
 
 
 def _normalize_text(text: str) -> str:
@@ -213,20 +434,43 @@ async def chat_with_gemini(payload: GeminiChatRequest):
     # 1) Rule cứng
     rule_reply = _hard_rule_reply(normalized_message)
     if rule_reply:
-        return {
+        scope_label = _classify_scope(normalized_message)
+        result = {
             "reply": rule_reply,
             "source": "rule",
             "cached": False,
+            "scope_label": scope_label,
+        }
+        # Thêm disclaimer cho câu hỏi pháp luật
+        if scope_label == "legal_sensitive":
+            result["warning"] = "Thông tin tham khảo. Cần đối chiếu với văn bản pháp luật gốc để đảm bảo chính xác."
+        return result
+
+    scope_label = _classify_scope(normalized_message)
+    scope_rules = _load_scope_rules()
+
+    # 0) Chặn câu hỏi ngoài phạm vi hệ thống nhận diện / luật giao thông
+    if scope_label == "out_of_scope":
+        return {
+            "reply": scope_rules.get("out_of_scope_reply", _OUT_OF_SCOPE_REPLY),
+            "source": "scope_guard",
+            "cached": False,
+            "scope_label": scope_label,
         }
 
     # 2) Cache
     cached_reply = _cache_get(normalized_message)
     if cached_reply:
-        return {
+        result = {
             "reply": cached_reply,
             "source": "cache",
             "cached": True,
+            "scope_label": scope_label,
         }
+        # Thêm disclaimer cho câu hỏi pháp luật
+        if scope_label == "legal_sensitive":
+            result["warning"] = "Thông tin tham khảo. Cần đối chiếu với văn bản pháp luật gốc để đảm bảo chính xác."
+        return result
 
     # 3) Gemini
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -236,6 +480,7 @@ async def chat_with_gemini(payload: GeminiChatRequest):
             "source": "fallback",
             "cached": False,
             "error": "Chua cau hinh GEMINI_API_KEY trong environment",
+            "scope_label": scope_label,
         }
 
     url = os.getenv(
@@ -247,7 +492,7 @@ async def chat_with_gemini(payload: GeminiChatRequest):
         "contents": [
             {
                 "parts": [
-                    {"text": payload.message}
+                    {"text": _build_gemini_prompt(payload.message)}
                 ]
             }
         ]
@@ -280,14 +525,23 @@ async def chat_with_gemini(payload: GeminiChatRequest):
                 "source": "fallback",
                 "cached": False,
                 "error": "Gemini khong tra ve noi dung text",
+                "scope_label": scope_label,
             }
 
         _cache_set(normalized_message, text)
-        return {
+        
+        result = {
             "reply": text,
             "source": "gemini",
             "cached": False,
+            "scope_label": scope_label,
         }
+        
+        # Thêm disclaimer cho câu hỏi pháp luật
+        if scope_label == "legal_sensitive":
+            result["warning"] = "Thông tin tham khảo. Cần đối chiếu với văn bản pháp luật gốc để đảm bảo chính xác."
+        
+        return result
     except httpx.HTTPStatusError as e:
         # 4) Fallback
         return {
@@ -297,6 +551,7 @@ async def chat_with_gemini(payload: GeminiChatRequest):
             "error": "Gemini API tra ve loi",
             "status_code": e.response.status_code,
             "details": e.response.text,
+            "scope_label": scope_label,
         }
     except Exception as e:
         # 4) Fallback
@@ -305,4 +560,5 @@ async def chat_with_gemini(payload: GeminiChatRequest):
             "source": "fallback",
             "cached": False,
             "error": str(e),
+            "scope_label": scope_label,
         }
