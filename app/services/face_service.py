@@ -1,7 +1,5 @@
 """Service nhận diện khuôn mặt và quản lý danh bạ khuôn mặt."""
 
-import json
-import os
 import time
 import uuid
 from typing import Any
@@ -19,22 +17,22 @@ except Exception:  # pragma: no cover - fallback when Pillow is unavailable
 
 from app.utils.image_utils import encode_image_to_base64
 from app.services.machine_context import get_current_machine_id
+from app.services.postgres_service import postgres_storage
 
 
 class FaceRecognitionService:
     """Service đăng ký và nhận diện khuôn mặt theo ảnh."""
 
-    def __init__(self, db_path: str = "runs/face_db.json"):
-        self.db_path = db_path
+    def __init__(self):
         self.data = {"persons": []}
         self.face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
         self.embedding_backend = "hog"
         self.face_analyzer = None
-        os.makedirs("runs", exist_ok=True)
+        postgres_storage.init_schema()
         self._init_embedding_backend()
-        self._load_db()
+        self._refresh_cache()
 
     def _init_embedding_backend(self) -> None:
         """Ưu tiên ArcFace (InsightFace), fallback về HOG khi thiếu dependency/model."""
@@ -48,17 +46,95 @@ class FaceRecognitionService:
             self.face_analyzer = None
             self.embedding_backend = "hog"
 
-    def _load_db(self) -> None:
-        if os.path.exists(self.db_path):
-            try:
-                with open(self.db_path, "r", encoding="utf-8") as f:
-                    self.data = json.load(f)
-            except Exception:
-                self.data = {"persons": []}
+    def _refresh_cache(self) -> None:
+        self.data = {"persons": self._load_all_persons()}
 
-    def _save_db(self) -> None:
-        with open(self.db_path, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+    def _load_all_persons(self) -> list[dict[str, Any]]:
+        if not postgres_storage.enabled:
+            return self.data.get("persons", [])
+
+        rows = postgres_storage.fetch_all(
+            """
+            SELECT
+                person_id,
+                owner_machine_id,
+                name,
+                person_code,
+                info,
+                descriptors,
+                registration_image_path,
+                created_at
+            FROM face_persons
+            ORDER BY created_at DESC
+            """
+        )
+
+        persons: list[dict[str, Any]] = []
+        for row in rows:
+            persons.append(
+                {
+                    "person_id": row.get("person_id", ""),
+                    "owner_machine_id": row.get("owner_machine_id", "default"),
+                    "name": row.get("name", ""),
+                    "person_code": row.get("person_code", ""),
+                    "info": row.get("info") if isinstance(row.get("info"), dict) else {},
+                    "descriptors": row.get("descriptors") if isinstance(row.get("descriptors"), list) else [],
+                    "registration_image_path": row.get("registration_image_path", ""),
+                    "created_at": float(row.get("created_at", 0.0) or 0.0),
+                }
+            )
+        return persons
+
+    def _upsert_person(self, person: dict[str, Any]) -> None:
+        if not postgres_storage.enabled:
+            persons = [p for p in self.data.get("persons", []) if p.get("person_id") != person.get("person_id")]
+            persons.append(person)
+            self.data["persons"] = persons
+            return
+
+        postgres_storage.execute(
+            """
+            INSERT INTO face_persons (
+                person_id,
+                owner_machine_id,
+                name,
+                person_code,
+                info,
+                descriptors,
+                registration_image_path,
+                created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (person_id) DO UPDATE SET
+                owner_machine_id = EXCLUDED.owner_machine_id,
+                name = EXCLUDED.name,
+                person_code = EXCLUDED.person_code,
+                info = EXCLUDED.info,
+                descriptors = EXCLUDED.descriptors,
+                registration_image_path = EXCLUDED.registration_image_path,
+                created_at = EXCLUDED.created_at
+            """,
+            (
+                str(person.get("person_id", "")),
+                str(person.get("owner_machine_id", "default") or "default"),
+                str(person.get("name", "")),
+                str(person.get("person_code", "")),
+                postgres_storage.to_json(person.get("info", {})),
+                postgres_storage.to_json(person.get("descriptors", [])),
+                str(person.get("registration_image_path", "")),
+                float(person.get("created_at", time.time())),
+            ),
+        )
+
+    def _delete_person_row(self, person_id: str) -> int:
+        if not postgres_storage.enabled:
+            before = len(self.data.get("persons", []))
+            self.data["persons"] = [p for p in self.data.get("persons", []) if p.get("person_id") != person_id]
+            return max(0, before - len(self.data.get("persons", [])))
+
+        return postgres_storage.execute(
+            "DELETE FROM face_persons WHERE person_id = %s",
+            (person_id,),
+        )
 
     @staticmethod
     def _face_descriptor(face_bgr: np.ndarray) -> list[float]:
@@ -258,8 +334,8 @@ class FaceRecognitionService:
             "created_at": time.time(),
         }
 
-        self.data.setdefault("persons", []).append(person)
-        self._save_db()
+        self._upsert_person(person)
+        self._refresh_cache()
 
         annotated = image.copy()
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 200, 0), 2)
@@ -282,7 +358,7 @@ class FaceRecognitionService:
         candidate_results = []
 
         # Use all persons from all machines (public database)
-        persons = self.data.get("persons", [])
+        persons = self._load_all_persons()
 
         for candidate in face_candidates:
             x1, y1, x2, y2 = candidate["bbox"]
@@ -387,8 +463,10 @@ class FaceRecognitionService:
 
     def list_persons(self, machine_id: str | None = None) -> list[dict]:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
+        all_persons = self._load_all_persons()
+        self.data = {"persons": all_persons}
         persons = []
-        for person in self.data.get("persons", []):
+        for person in all_persons:
             owner = person.get("owner_machine_id") or person.get("machine_id") or "default"
             if owner != machine_scope:
                 continue
@@ -408,7 +486,7 @@ class FaceRecognitionService:
 
     def set_registration_image_path(self, person_id: str, image_path: str, machine_id: str | None = None) -> bool:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        persons = self.data.get("persons", [])
+        persons = self._load_all_persons()
         for person in persons:
             if person.get("person_id") == person_id:
                 # Only allow if current machine is the owner
@@ -416,7 +494,8 @@ class FaceRecognitionService:
                 if owner != machine_scope:
                     return False
                 person["registration_image_path"] = image_path or ""
-                self._save_db()
+                self._upsert_person(person)
+                self._refresh_cache()
                 return True
         return False
 
@@ -430,7 +509,7 @@ class FaceRecognitionService:
         machine_id: str | None = None,
     ) -> dict:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        persons = self.data.get("persons", [])
+        persons = self._load_all_persons()
         for person in persons:
             if person.get("person_id") != person_id:
                 continue
@@ -450,7 +529,8 @@ class FaceRecognitionService:
             if registration_image_path is not None:
                 person["registration_image_path"] = registration_image_path
 
-            self._save_db()
+            self._upsert_person(person)
+            self._refresh_cache()
             return {
                 "person_id": person.get("person_id"),
                 "name": person.get("name"),
@@ -464,7 +544,7 @@ class FaceRecognitionService:
 
     def delete_person(self, person_id: str, machine_id: str | None = None) -> bool:
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        persons = self.data.get("persons", [])
+        persons = self._load_all_persons()
         
         # Find person and check ownership
         target_person = None
@@ -481,8 +561,14 @@ class FaceRecognitionService:
         if owner != machine_scope:
             return False  # Not authorized to delete
         
-        # Delete the person
-        new_persons = [p for p in persons if p.get("person_id") != person_id]
-        self.data["persons"] = new_persons
-        self._save_db()
-        return True
+        deleted = self._delete_person_row(person_id) > 0
+        if deleted:
+            self._refresh_cache()
+        return deleted
+
+    def get_person_by_id(self, person_id: str) -> dict[str, Any] | None:
+        persons = self._load_all_persons()
+        for person in persons:
+            if person.get("person_id") == person_id:
+                return person
+        return None

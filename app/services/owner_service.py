@@ -1,31 +1,40 @@
 """Service tra cứu chủ sở hữu biển số từ danh bạ khuôn mặt (public toàn hệ thống)."""
 
-import json
-import os
 from typing import Any
 
+from app.services.postgres_service import postgres_storage
 from app.utils.plate_formatter import VietnamPlateFormatter
 
 
 class OwnerLookupService:
-    """Tra cứu owner theo biển số từ face_db.json."""
+    """Tra cứu owner theo biển số từ PostgreSQL."""
 
-    def __init__(self, face_db_path: str = "runs/face_db.json"):
-        self.face_db_path = face_db_path
+    def __init__(self):
+        postgres_storage.init_schema()
 
     def _load_face_db(self) -> dict[str, Any]:
-        if not os.path.exists(self.face_db_path):
+        if not postgres_storage.enabled:
             return {"persons": []}
-        try:
-            with open(self.face_db_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return {"persons": []}
-            if not isinstance(data.get("persons"), list):
-                data["persons"] = []
-            return data
-        except Exception:
-            return {"persons": []}
+
+        rows = postgres_storage.fetch_all(
+            """
+            SELECT person_id, name, person_code, info, owner_machine_id
+            FROM face_persons
+            ORDER BY created_at DESC
+            """
+        )
+        persons = []
+        for row in rows:
+            persons.append(
+                {
+                    "person_id": row.get("person_id", ""),
+                    "name": row.get("name", ""),
+                    "person_code": row.get("person_code", ""),
+                    "info": row.get("info") if isinstance(row.get("info"), dict) else {},
+                    "owner_machine_id": row.get("owner_machine_id", "default"),
+                }
+            )
+        return {"persons": persons}
 
     @staticmethod
     def _extract_plate_candidates(info: dict[str, Any]) -> list[str]:

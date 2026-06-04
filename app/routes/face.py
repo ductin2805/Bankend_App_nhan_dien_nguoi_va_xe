@@ -237,8 +237,7 @@ async def delete_face_person(person_id: str):
     deleted = face_service.delete_person(person_id)
     if not deleted:
         # Determine if it's a permission issue or not found
-        persons = face_service.data.get("persons", [])
-        person = next((p for p in persons if p.get("person_id") == person_id), None)
+        person = face_service.get_person_by_id(person_id)
         if person:
             return {"error": "Không có quyền xóa hồ sơ này. Chỉ máy đăng ký mới được phép xóa."}
         return {"error": "Person not found"}

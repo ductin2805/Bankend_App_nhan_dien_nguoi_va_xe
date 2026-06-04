@@ -1,36 +1,25 @@
 """Service quản lý lịch sử thao tác của app."""
 
-import time
+from __future__ import annotations
+
 import json
-import os
-from typing import List, Dict, Any
-from collections import deque
-from app.utils.plate_formatter import VietnamPlateFormatter
+import time
+from typing import Any
+
 from app.services.machine_context import get_current_machine_id
+from app.services.postgres_service import postgres_storage
+from app.utils.plate_formatter import VietnamPlateFormatter
 
 
 class HistoryService:
-    """Service lưu trữ và quản lý lịch sử thao tác."""
+    """Service lưu trữ và quản lý lịch sử thao tác bằng PostgreSQL."""
 
-    def __init__(self, max_entries: int = 1000, save_to_file: bool = True, file_path: str = "history.json"):
-        """
-        Khởi tạo HistoryService.
-
-        Args:
-            max_entries: Số lượng entry tối đa lưu trữ
-            save_to_file: Có lưu vào file không
-            file_path: Đường dẫn file lưu trữ
-        """
-        self.history: deque = deque(maxlen=max_entries)
+    def __init__(self, max_entries: int = 1000):
         self.max_entries = max_entries
-        self.save_to_file = save_to_file
-        self.file_path = file_path
-        
-        # Load từ file nếu có
-        if save_to_file and os.path.exists(file_path):
-            self._load_from_file()
+        self._memory_entries: list[dict[str, Any]] = []
+        postgres_storage.init_schema()
 
-    def add_entry(self, entry: Dict[str, Any], full_result: Dict[str, Any] = None, machine_id: str | None = None) -> str:
+    def add_entry(self, entry: dict[str, Any], full_result: dict[str, Any] | None = None, machine_id: str | None = None) -> str:
         """
         Thêm entry mới vào lịch sử.
 
@@ -43,27 +32,58 @@ class HistoryService:
         """
         entry_id = f"{int(time.time() * 1000)}"
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        entry['id'] = entry_id
-        entry['timestamp'] = time.time()
-        entry['machine_id'] = machine_scope
-        
+        payload = dict(entry)
+        payload["id"] = entry_id
+        payload["timestamp"] = time.time()
+        payload["machine_id"] = machine_scope
+
         # Lưu full result nếu có và không quá lớn
         if full_result:
-            result_size = len(json.dumps(full_result, default=str).encode('utf-8'))
+            result_size = len(json.dumps(full_result, default=str).encode("utf-8"))
             if result_size < 5 * 1024 * 1024:  # Max 5MB per result
-                entry['full_result'] = full_result
+                payload["full_result"] = full_result
             else:
-                entry['full_result'] = {"error": "Result too large to store"}
-        
-        self.history.append(entry)
-        
-        # Lưu vào file nếu enabled
-        if self.save_to_file:
-            self._save_to_file()
-        
+                payload["full_result"] = {"error": "Result too large to store"}
+
+        if postgres_storage.enabled:
+            postgres_storage.execute(
+                """
+                INSERT INTO history_entries (
+                    id, machine_id, timestamp, type, method, path, summary,
+                    full_result, representative_image_path, raw_entry
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    machine_id = EXCLUDED.machine_id,
+                    timestamp = EXCLUDED.timestamp,
+                    type = EXCLUDED.type,
+                    method = EXCLUDED.method,
+                    path = EXCLUDED.path,
+                    summary = EXCLUDED.summary,
+                    full_result = EXCLUDED.full_result,
+                    representative_image_path = EXCLUDED.representative_image_path,
+                    raw_entry = EXCLUDED.raw_entry
+                """,
+                (
+                    payload.get("id"),
+                    payload.get("machine_id"),
+                    float(payload.get("timestamp", time.time())),
+                    payload.get("type"),
+                    payload.get("method"),
+                    payload.get("path"),
+                    postgres_storage.to_json(payload.get("summary", {})),
+                    postgres_storage.to_json(payload.get("full_result")),
+                    payload.get("representative_image_path", ""),
+                    postgres_storage.to_json(payload),
+                ),
+            )
+            self._trim_history_table()
+        else:
+            self._memory_entries.append(payload)
+            self._memory_entries = self._memory_entries[-self.max_entries :]
+
         return entry_id
 
-    def get_entry_by_id(self, entry_id: str, machine_id: str | None = None) -> Dict[str, Any]:
+    def get_entry_by_id(self, entry_id: str, machine_id: str | None = None) -> dict[str, Any] | None:
         """
         Lấy entry theo ID.
 
@@ -74,12 +94,13 @@ class HistoryService:
             Entry dict hoặc None nếu không tìm thấy
         """
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        for entry in self.history:
-            if entry.get('id') == entry_id and self._entry_machine_id(entry) == machine_scope:
+        rows = self._fetch_machine_entries(machine_scope)
+        for entry in rows:
+            if entry.get("id") == entry_id:
                 return self._normalize_entry(entry)
         return None
 
-    def get_history(self, limit: int = 50, offset: int = 0, machine_id: str | None = None) -> List[Dict[str, Any]]:
+    def get_history(self, limit: int = 50, offset: int = 0, machine_id: str | None = None) -> list[dict[str, Any]]:
         """
         Lấy danh sách lịch sử.
 
@@ -91,15 +112,12 @@ class HistoryService:
             List các entry lịch sử
         """
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        history_list = [entry for entry in self.history if self._entry_machine_id(entry) == machine_scope]
-        if not history_list:
+        rows = self._fetch_machine_entries(machine_scope)
+        if not rows:
             return []
-
-        # Trả về theo thứ tự mới nhất trước
-        history_list.reverse()
-        start = min(offset, len(history_list))
-        end = min(start + limit, len(history_list))
-        return [self._normalize_entry(entry) for entry in history_list[start:end]]
+        start = min(offset, len(rows))
+        end = min(start + limit, len(rows))
+        return [self._normalize_entry(entry) for entry in rows[start:end]]
 
     def get_history_filtered(
         self,
@@ -112,7 +130,7 @@ class HistoryService:
         limit: int = 50,
         offset: int = 0,
         machine_id: str | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Lấy lịch sử có lọc theo endpoint/type/method/keyword/time."""
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         endpoint_filter = (endpoint or "").strip().lower()
@@ -121,9 +139,7 @@ class HistoryService:
         keyword_filter = (keyword or "").strip().lower()
 
         filtered = []
-        for entry in self.history:
-            if self._entry_machine_id(entry) != machine_scope:
-                continue
+        for entry in self._fetch_machine_entries(machine_scope):
             entry_type = str(entry.get("type", "")).strip().lower()
             entry_method = str(entry.get("method", "")).strip().lower()
             entry_path = str(entry.get("path", "")).strip().lower()
@@ -184,21 +200,18 @@ class HistoryService:
         if not filtered:
             return []
 
-        filtered.reverse()
         start = min(offset, len(filtered))
         end = min(start + limit, len(filtered))
         return [self._normalize_entry(entry) for entry in filtered[start:end]]
 
-    def list_filter_values(self, machine_id: str | None = None) -> Dict[str, List[str]]:
+    def list_filter_values(self, machine_id: str | None = None) -> dict[str, list[str]]:
         """Lấy các giá trị lọc hợp lệ để client hiển thị."""
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         endpoints = set()
         action_types = set()
         methods = set()
 
-        for entry in self.history:
-            if self._entry_machine_id(entry) != machine_scope:
-                continue
+        for entry in self._fetch_machine_entries(machine_scope):
             entry_type = str(entry.get("type", "")).strip().lower()
             entry_method = str(entry.get("method", "")).strip().lower()
             entry_path = str(entry.get("path", "")).strip()
@@ -221,7 +234,7 @@ class HistoryService:
             "methods": sorted(methods),
         }
 
-    def filter_history(self, category: str, limit: int = 50, offset: int = 0, machine_id: str | None = None) -> List[Dict[str, Any]]:
+    def filter_history(self, category: str, limit: int = 50, offset: int = 0, machine_id: str | None = None) -> list[dict[str, Any]]:
         """
         Lọc lịch sử theo danh mục.
 
@@ -233,9 +246,7 @@ class HistoryService:
 
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         filtered = []
-        for entry in self.history:
-            if self._entry_machine_id(entry) != machine_scope:
-                continue
+        for entry in self._fetch_machine_entries(machine_scope):
             entry_type = str(entry.get("type", "")).lower()
             entry_path = str(entry.get("path", "")).lower()
             entry_method = str(entry.get("method", "")).lower()
@@ -246,7 +257,6 @@ class HistoryService:
         if not filtered:
             return []
 
-        filtered.reverse()
         start = min(offset, len(filtered))
         end = min(start + limit, len(filtered))
         return [self._normalize_entry(entry) for entry in filtered[start:end]]
@@ -258,27 +268,16 @@ class HistoryService:
             return 0
 
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
-        remaining = []
-        deleted_count = 0
-        for entry in self.history:
-            if self._entry_machine_id(entry) != machine_scope:
-                remaining.append(entry)
-                continue
+        entries = self._fetch_machine_entries(machine_scope)
+        ids_to_delete = []
+        for entry in entries:
             entry_type = str(entry.get("type", "")).lower()
             entry_path = str(entry.get("path", "")).lower()
             entry_method = str(entry.get("method", "")).lower()
-
             if normalized_category in {entry_type, entry_path, entry_method}:
-                deleted_count += 1
-            else:
-                remaining.append(entry)
+                ids_to_delete.append(str(entry.get("id", "")))
 
-        if deleted_count > 0:
-            self.history = deque(remaining, maxlen=self.max_entries)
-            if self.save_to_file:
-                self._save_to_file()
-
-        return deleted_count
+        return self.delete_by_ids(ids_to_delete, machine_id=machine_scope)
 
     @staticmethod
     def _type_to_endpoint(entry_type: str) -> str:
@@ -293,13 +292,11 @@ class HistoryService:
         }
         return mapping.get(entry_type, "")
 
-    def list_endpoints(self) -> List[str]:
+    def list_endpoints(self) -> list[str]:
         """Lấy danh sách endpoint đang có trong lịch sử để client hiển thị checkbox."""
         machine_scope = get_current_machine_id() or "default"
         endpoints = set()
-        for entry in self.history:
-            if self._entry_machine_id(entry) != machine_scope:
-                continue
+        for entry in self._fetch_machine_entries(machine_scope):
             path = str(entry.get("path", "")).strip()
             if path.startswith("/"):
                 endpoints.add(path)
@@ -311,72 +308,58 @@ class HistoryService:
 
         return sorted(endpoints)
 
-    def delete_by_endpoints(self, endpoints: List[str], machine_id: str | None = None) -> int:
+    def delete_by_endpoints(self, endpoints: list[str], machine_id: str | None = None) -> int:
         """Xóa lịch sử theo danh sách endpoint được chọn."""
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         normalized = {str(ep).strip().lower() for ep in endpoints if str(ep).strip()}
         if not normalized:
             return 0
 
-        remaining = []
-        deleted_count = 0
+        ids_to_delete = []
 
-        for entry in self.history:
-            if self._entry_machine_id(entry) != machine_scope:
-                remaining.append(entry)
-                continue
+        for entry in self._fetch_machine_entries(machine_scope):
             path = str(entry.get("path", "")).strip().lower()
             entry_type = str(entry.get("type", "")).strip().lower()
             mapped_path = self._type_to_endpoint(entry_type).lower()
 
             if path in normalized or mapped_path in normalized:
-                deleted_count += 1
-            else:
-                remaining.append(entry)
+                ids_to_delete.append(str(entry.get("id", "")))
 
-        if deleted_count > 0:
-            self.history = deque(remaining, maxlen=self.max_entries)
-            if self.save_to_file:
-                self._save_to_file()
+        return self.delete_by_ids(ids_to_delete, machine_id=machine_scope)
 
-        return deleted_count
-
-    def delete_by_ids(self, ids: List[str], machine_id: str | None = None) -> int:
+    def delete_by_ids(self, ids: list[str], machine_id: str | None = None) -> int:
         """Xóa lịch sử theo danh sách id đã tích chọn."""
         machine_scope = (machine_id or get_current_machine_id() or "default").strip() or "default"
         id_set = {str(item).strip() for item in ids if str(item).strip()}
         if not id_set:
             return 0
 
-        remaining = []
-        deleted_count = 0
-        for entry in self.history:
-            if self._entry_machine_id(entry) == machine_scope and str(entry.get("id", "")) in id_set:
-                deleted_count += 1
-            else:
-                remaining.append(entry)
+        if postgres_storage.enabled:
+            return postgres_storage.execute(
+                "DELETE FROM history_entries WHERE machine_id = %s AND id = ANY(%s)",
+                (machine_scope, list(id_set)),
+            )
 
-        if deleted_count > 0:
-            self.history = deque(remaining, maxlen=self.max_entries)
-            if self.save_to_file:
-                self._save_to_file()
-
-        return deleted_count
+        before = len(self._memory_entries)
+        self._memory_entries = [
+            item
+            for item in self._memory_entries
+            if not (self._entry_machine_id(item) == machine_scope and str(item.get("id", "")) in id_set)
+        ]
+        return max(0, before - len(self._memory_entries))
 
     def clear_history(self) -> int:
         """Xóa toàn bộ lịch sử và trả về số lượng đã xóa."""
         machine_scope = get_current_machine_id() or "default"
-        remaining = []
-        deleted_count = 0
-        for entry in self.history:
-            if self._entry_machine_id(entry) == machine_scope:
-                deleted_count += 1
-            else:
-                remaining.append(entry)
-        self.history = deque(remaining, maxlen=self.max_entries)
-        if self.save_to_file:
-            self._save_to_file()
-        return deleted_count
+        if postgres_storage.enabled:
+            return postgres_storage.execute(
+                "DELETE FROM history_entries WHERE machine_id = %s",
+                (machine_scope,),
+            )
+
+        before = len(self._memory_entries)
+        self._memory_entries = [item for item in self._memory_entries if self._entry_machine_id(item) != machine_scope]
+        return max(0, before - len(self._memory_entries))
 
     @staticmethod
     def _to_public_path(path: str) -> str:
@@ -391,7 +374,7 @@ class HistoryService:
         return normalized
 
     @staticmethod
-    def _extract_representative_path(entry: Dict[str, Any]) -> str:
+    def _extract_representative_path(entry: dict[str, Any]) -> str:
         """Lấy đường dẫn ảnh đại diện từ entry nếu có."""
         if entry.get("representative_image_path"):
             return HistoryService._to_public_path(entry.get("representative_image_path", ""))
@@ -411,11 +394,11 @@ class HistoryService:
         return ""
 
     @staticmethod
-    def _entry_machine_id(entry: Dict[str, Any]) -> str:
+    def _entry_machine_id(entry: dict[str, Any]) -> str:
         machine_id = str(entry.get("machine_id", "default")).strip()
         return machine_id or "default"
 
-    def _normalize_entry(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
         """Chuẩn hóa entry để response /history nhất quán."""
         normalized = dict(entry)
         normalized.pop("machine_id", None)
@@ -433,7 +416,7 @@ class HistoryService:
                 normalized["path"] = mapped_path
         normalized["representative_image_path"] = self._extract_representative_path(normalized)
 
-        def _normalize_plates(values: Any) -> List[str]:
+        def _normalize_plates(values: Any) -> list[str]:
             if not isinstance(values, list):
                 return []
             output = []
@@ -469,7 +452,7 @@ class HistoryService:
 
         return normalized
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Lấy thống kê lịch sử.
 
@@ -477,7 +460,7 @@ class HistoryService:
             Dict chứa thống kê
         """
         machine_scope = get_current_machine_id() or "default"
-        scoped_history = [entry for entry in self.history if self._entry_machine_id(entry) == machine_scope]
+        scoped_history = self._fetch_machine_entries(machine_scope)
 
         if not scoped_history:
             return {
@@ -486,31 +469,51 @@ class HistoryService:
                 "newest_timestamp": None
             }
 
-        timestamps = [entry['timestamp'] for entry in scoped_history]
+        timestamps = [entry["timestamp"] for entry in scoped_history]
         return {
             "total_entries": len(scoped_history),
             "oldest_timestamp": min(timestamps),
             "newest_timestamp": max(timestamps)
         }
 
-    def _save_to_file(self) -> None:
-        """Lưu lịch sử vào file JSON."""
-        try:
-            with open(self.file_path, 'w', encoding='utf-8') as f:
-                json.dump(list(self.history), f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Error saving history to file: {e}")
+    def _fetch_machine_entries(self, machine_scope: str) -> list[dict[str, Any]]:
+        if postgres_storage.enabled:
+            rows = postgres_storage.fetch_all(
+                """
+                SELECT raw_entry
+                FROM history_entries
+                WHERE machine_id = %s
+                ORDER BY timestamp DESC
+                """,
+                (machine_scope,),
+            )
+            entries = []
+            for row in rows:
+                raw_entry = row.get("raw_entry") if isinstance(row, dict) else None
+                if isinstance(raw_entry, dict):
+                    entries.append(raw_entry)
+            return entries
 
-    def _load_from_file(self) -> None:
-        """Tải lịch sử từ file JSON."""
-        try:
-            with open(self.file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Chỉ load số lượng tối đa
-                for entry in data[-self.max_entries:]:
-                    self.history.append(entry)
-        except Exception as e:
-            print(f"Error loading history from file: {e}")
+        rows = [entry for entry in self._memory_entries if self._entry_machine_id(entry) == machine_scope]
+        rows.sort(key=lambda item: float(item.get("timestamp", 0.0)), reverse=True)
+        return rows
+
+    def _trim_history_table(self) -> None:
+        if not postgres_storage.enabled:
+            return
+
+        postgres_storage.execute(
+            """
+            DELETE FROM history_entries
+            WHERE id IN (
+                SELECT id
+                FROM history_entries
+                ORDER BY timestamp DESC
+                OFFSET %s
+            )
+            """,
+            (self.max_entries,),
+        )
 
 
 # Global instance
